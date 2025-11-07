@@ -1,12 +1,15 @@
 # ADS-B Decoder and REST API
+
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![CI](https://github.com/jbencina/adsb/actions/workflows/ci.yml/badge.svg)](https://github.com/jbencina/adsb/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/adsb-map.svg)](https://pypi.org/project/adsb-map/)
+[![CI](https://github.com/jbencina/adsb-map/actions/workflows/ci.yml/badge.svg)](https://github.com/jbencina/adsb-map/actions/workflows/ci.yml)
+[![Publish](https://github.com/jbencina/adsb-map/actions/workflows/publish.yml/badge.svg)](https://github.com/jbencina/adsb-map/actions/workflows/publish.yml)
 
 ADS-B decoder and REST API server using [pyModeS](https://github.com/junzis/pyModeS) for decoding Mode-S and ADS-B messages. This application mirrors the functionality of [jet1090](https://github.com/xoolive/rs1090/) with a Python-based solution 
 that provides the same REST API interface.
 
-![Map interface demo](docs/map.png)
+![Map interface demo](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/map.png)
 
 
 ## Quickstart

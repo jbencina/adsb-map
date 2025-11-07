@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2024-11-07
+
+### Fixed
+- Fixed broken image link on PyPI (now uses absolute GitHub URL)
+- Added PyPI version badge to README
+- Added CI and Publish workflow status badges
+- Corrected GitHub repository URLs in badges (adsb → adsb-map)
+
 ## [0.1.0] - 2024-11-07
 
 ### Added

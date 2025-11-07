@@ -1,0 +1,103 @@
+[project]
+name = "adsb-map"
+version = "0.1.0"
+description = "Python library for ADS-B decoding and REST API using pyModeS"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "GPL-3.0-or-later"}
+authors = [
+    {name = "John Bencina", email = "jbencina@users.noreply.github.com"}
+]
+keywords = ["adsb", "ads-b", "aviation", "aircraft", "tracking", "pymodes", "decoder", "mode-s", "sdr", "beast"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: System :: Monitoring",
+    "Framework :: FastAPI",
+]
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlalchemy>=2.0.0",
+    "pydantic>=2.9.0",
+    "click>=8.1.0",
+    "pyModeS>=2.21.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jbencina/adsb"
+Repository = "https://github.com/jbencina/adsb"
+Issues = "https://github.com/jbencina/adsb/issues"
+
+[project.scripts]
+adsb = "adsb.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["adsb"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/adsb",
+  "/tests",
+  "/README.md",
+  "/LICENSE",
+  "/CHANGELOG.md",
+  "/pyproject.toml",
+]
+
+[dependency-groups]
+dev = [
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.2",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+    "pre-commit>=3.6.0",
+    "tox>=4.0.0",
+    "tox-uv>=1.0.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults (FastAPI Depends pattern)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "B017",  # pytest.raises(Exception) is acceptable in tests
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

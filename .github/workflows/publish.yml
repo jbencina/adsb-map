@@ -23,7 +23,7 @@ jobs:
       url: https://pypi.org/p/adsb-map
     permissions:
       id-token: write   # required for PyPI trusted publishing (OIDC)
-      contents: read
+      contents: write   # required to create the GitHub Release
     steps:
       - uses: actions/checkout@v5
 
@@ -53,3 +53,34 @@ jobs:
 
       - name: Publish to PyPI
         run: uv publish --trusted-publishing always
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          NOTES=$(awk '/^## \[/{p=0} /^## \['"$VERSION"'\]/{p=1; next} p' CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            echo "::warning::No CHANGELOG section found for $VERSION; release will use auto-generated notes."
+          fi
+          {
+            echo "notes<<NOTES_EOF"
+            echo "$NOTES"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [ -n "${{ steps.notes.outputs.notes }}" ]; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "${{ steps.notes.outputs.notes }}" \
+              dist/*.whl dist/*.tar.gz
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --generate-notes \
+              dist/*.whl dist/*.tar.gz
+          fi

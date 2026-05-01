@@ -32,9 +32,9 @@ def client(test_db, test_session):
     return TestClient(app)
 
 
-def test_root_endpoint(client):
-    """Test the root endpoint."""
-    response = client.get("/")
+def test_api_root_endpoint(client):
+    """Test the API discovery endpoint."""
+    response = client.get("/api")
     assert response.status_code == 200
     data = response.json()
     assert "message" in data
@@ -43,7 +43,7 @@ def test_root_endpoint(client):
 
 def test_get_all_aircraft_empty(client):
     """Test getting all aircraft when database is empty."""
-    response = client.get("/all")
+    response = client.get("/api/all")
     assert response.status_code == 200
     assert response.json() == []
 
@@ -62,7 +62,7 @@ def test_get_all_aircraft_with_data(test_session, client, aircraft):
         test_session.add(metadata)
     test_session.commit()
 
-    response = client.get("/all")
+    response = client.get("/api/all")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 1
@@ -79,7 +79,7 @@ def test_get_icao24_addresses(test_session, client, aircraft):
     test_session.add(aircraft2)
     test_session.commit()
 
-    response = client.get("/icao24")
+    response = client.get("/api/icao24")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2
@@ -89,7 +89,7 @@ def test_get_icao24_addresses(test_session, client, aircraft):
 
 def test_get_track_not_found(client):
     """Test getting track for non-existent aircraft."""
-    response = client.get("/track?icao24=notfound")
+    response = client.get("/api/track?icao24=notfound")
     assert response.status_code == 200
     assert response.json() == []
 
@@ -108,7 +108,7 @@ def test_get_track_with_data(test_session, client, aircraft):
         test_session.add(position)
     test_session.commit()
 
-    response = client.get("/track?icao24=abc123")
+    response = client.get("/api/track?icao24=abc123")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 3
@@ -131,7 +131,7 @@ def test_get_track_with_since_filter(test_session, client, aircraft):
     test_session.commit()
 
     # Filter to only get positions since timestamp 1234567892
-    response = client.get("/track?icao24=abc123&since=1234567892")
+    response = client.get("/api/track?icao24=abc123&since=1234567892")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 3  # Should only get positions at 1234567892, 1234567893, 1234567894
@@ -156,7 +156,7 @@ def test_get_sensors(test_session, client, aircraft):
     test_session.add(metadata2)
     test_session.commit()
 
-    response = client.get("/sensors")
+    response = client.get("/api/sensors")
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2
@@ -201,7 +201,7 @@ def test_lifespan_shutdown_with_network_client(test_db):
 
     # Test client works normally
     client = TestClient(app)
-    response = client.get("/")
+    response = client.get("/api")
     assert response.status_code == 200
     client.close()
 
@@ -212,7 +212,7 @@ def test_lifespan_shutdown_without_network_client(test_db):
     client = TestClient(app)
 
     # Make a request to ensure app starts
-    response = client.get("/")
+    response = client.get("/api")
     assert response.status_code == 200
 
     # Close the test client (triggers lifespan shutdown)
@@ -235,16 +235,78 @@ def test_database_session_rollback_on_exception(test_db):
         assert count >= 0  # Should work
 
 
-def test_cors_origins(test_db):
-    """Test that CORS origins are properly configured."""
+def test_cors_origins_in_dev_mode(test_db, monkeypatch):
+    """CORS middleware is registered when frontend is not bundled (dev mode)."""
+    import adsb.api
+
+    monkeypatch.setattr(adsb.api, "_frontend_is_bundled", lambda: False)
     app = create_app(test_db)
     client = TestClient(app)
 
-    # Test that specific origins are allowed
-    response = client.get("/", headers={"Origin": "http://localhost:5173"})
+    response = client.get("/api", headers={"Origin": "http://localhost:5173"})
     assert response.status_code == 200
-    # CORS headers should be present
     assert "access-control-allow-origin" in response.headers
+
+
+def test_spa_fallback_when_bundled(test_db, monkeypatch, tmp_path):
+    """When adsb/static/index.html exists, GET / serves the SPA and /api/foo returns 404."""
+    import adsb.api
+
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html>spa</html>")
+
+    monkeypatch.setattr(adsb.api, "STATIC_DIR", static_dir)
+    monkeypatch.setattr(adsb.api, "_frontend_is_bundled", lambda: True)
+
+    app = create_app(test_db)
+    client = TestClient(app)
+
+    spa = client.get("/")
+    assert spa.status_code == 200
+    assert "spa" in spa.text
+
+    assert client.get("/api/nonexistent").status_code == 404
+
+
+def test_config_js_available_in_dev_mode(test_db, monkeypatch):
+    """/config.js is registered even when the frontend is not bundled, so the Vite
+    proxy in dev doesn't 404 and the SPA's <script src='/config.js'> always works."""
+    import adsb.api
+
+    monkeypatch.setenv("MAPBOX_TOKEN", "pk.test_token_value")
+    monkeypatch.setattr(adsb.api, "_frontend_is_bundled", lambda: False)
+
+    app = create_app(test_db)
+    client = TestClient(app)
+
+    response = client.get("/config.js")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/javascript")
+    assert "window.APP_CONFIG" in response.text
+    assert "pk.test_token_value" in response.text
+
+
+def test_config_js_available_in_bundled_mode(test_db, monkeypatch, tmp_path):
+    """/config.js works in bundled mode and reads MAPBOX_TOKEN from the environment."""
+    import adsb.api
+
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html>spa</html>")
+
+    monkeypatch.setenv("MAPBOX_TOKEN", "pk.bundled_token")
+    monkeypatch.setattr(adsb.api, "STATIC_DIR", static_dir)
+    monkeypatch.setattr(adsb.api, "_frontend_is_bundled", lambda: True)
+
+    app = create_app(test_db)
+    client = TestClient(app)
+
+    response = client.get("/config.js")
+    assert response.status_code == 200
+    assert "pk.bundled_token" in response.text
+
+    assert client.get("/api/nonexistent").status_code == 404
 
 
 def test_max_metadata_records_constant(test_db):
@@ -258,11 +320,11 @@ def test_max_metadata_records_constant(test_db):
 @pytest.mark.parametrize(
     "endpoint,expected_status",
     [
-        ("/", 200),
-        ("/all", 200),
-        ("/icao24", 200),
-        ("/track?icao24=abc123", 200),  # Returns empty list for not found
-        ("/sensors", 200),
+        ("/api", 200),
+        ("/api/all", 200),
+        ("/api/icao24", 200),
+        ("/api/track?icao24=abc123", 200),  # Returns empty list for not found
+        ("/api/sensors", 200),
     ],
 )
 def test_api_endpoints_exist(test_db, endpoint, expected_status):

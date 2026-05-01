@@ -52,6 +52,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["adsb"]
 
+# adsb/static/ is gitignored; it's populated by `just build` (or CI) before
+# `uv build`. `artifacts` is hatchling's mechanism for including gitignored
+# generated files in the wheel.
+[tool.hatch.build]
+artifacts = ["adsb/static/**"]
+
 [tool.hatch.build.targets.sdist]
 include = [
   "/adsb",

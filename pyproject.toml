@@ -32,7 +32,9 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "pydantic>=2.9.0",
     "click>=8.1.0",
-    "pyModeS>=2.21.0",
+    # Pin to v2: v3 introduces a breaking API change (see migration guide upstream)
+    # that requires code changes in adsb/decoder.py. Bump separately when ready.
+    "pyModeS>=2.21.0,<3",
 ]
 
 [project.urls]

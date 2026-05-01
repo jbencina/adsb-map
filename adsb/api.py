@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
+from adsb import __version__
 from adsb.database import Database
 from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
 from adsb.schemas import AircraftStateSchema, SensorSchema, TrackPointSchema
@@ -95,7 +96,7 @@ def create_app(database: Database, network_client=None) -> FastAPI:
     app = FastAPI(
         title="ADS-B API",
         description="ADS-B decoder REST API using pyModeS",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
     )
 

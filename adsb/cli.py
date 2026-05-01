@@ -4,6 +4,7 @@ import logging
 
 import click
 import uvicorn
+from dotenv import find_dotenv, load_dotenv
 
 from adsb.api import create_app
 from adsb.database import Database
@@ -15,7 +16,11 @@ from adsb.network import start_network_client
 @click.version_option(version="0.1.0")
 def main():
     """ADS-B decoder and REST API server using pyModeS."""
-    pass
+    # Load .env from the current working directory (or parents) if present.
+    # `usecwd=True` is required: the default starts searching from the importing
+    # module's location, which under pytest/CliRunner doesn't match the user's CWD.
+    # `override=False` so explicit `MAPBOX_TOKEN=… adsb serve` still beats a stale .env.
+    load_dotenv(find_dotenv(usecwd=True), override=False)
 
 
 @main.command()

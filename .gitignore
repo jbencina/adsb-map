@@ -57,3 +57,8 @@ data/aircraft.csv.gz
 # doesn't fail when no build has been staged yet.
 adsb/static/*
 !adsb/static/.gitkeep
+
+# Local environment file (loaded by `adsb serve` via python-dotenv).
+# Keep .env.example tracked as a template.
+.env
+!.env.example

@@ -22,6 +22,8 @@ pip install adsb-map
 adsb download                                # one-time: aircraft database
 
 # Free Mapbox token: https://account.mapbox.com/access-tokens/
+# Either export it in your shell, or drop it in a `.env` file in the directory
+# you run `adsb serve` from (template: see .env.example in the repo).
 export MAPBOX_TOKEN=pk.your_token_here
 
 adsb serve --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
@@ -43,7 +45,7 @@ Visit http://localhost:8000/. Aircraft show up as markers; click one for its tra
 
 | Setting | Default | How to override |
 |---|---|---|
-| Mapbox token | (required for map UI) | `MAPBOX_TOKEN` env var |
+| Mapbox token | (required for map UI) | `MAPBOX_TOKEN` env var, or `.env` file in CWD |
 | Bind host | `0.0.0.0` | `adsb serve --host` |
 | Bind port | `8000` | `adsb serve --port` |
 | Database path | `./adsb.db` | `adsb serve --db-path` |
@@ -182,8 +184,9 @@ CI (`.github/workflows/publish.yml`) handles all of this on a `v*` tag push:
 4. `uv publish --trusted-publishing always` ships to PyPI via OIDC (no API tokens stored)
 
 The Mapbox token is **not** baked into the wheel. At runtime, the server exposes
-`/config.js` which reads `MAPBOX_TOKEN` from its environment and writes
-`window.APP_CONFIG` for the SPA. One wheel works for any user.
+`/config.js` which reads `MAPBOX_TOKEN` from its environment (process env, or a
+`.env` file in CWD via `python-dotenv`) and writes `window.APP_CONFIG` for the SPA.
+One wheel works for any user — no rebuild per token.
 
 ## Database schema
 

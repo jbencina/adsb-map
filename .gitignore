@@ -51,3 +51,14 @@ htmlcov/
 # Data files (user downloads these)
 data/aircraft.csv
 data/aircraft.csv.gz
+
+# Bundled frontend (populated by `just build` or CI before `uv build`)
+# The directory itself is committed via .gitkeep so hatchling's force-include
+# doesn't fail when no build has been staged yet.
+adsb/static/*
+!adsb/static/.gitkeep
+
+# Local environment file (loaded by `adsb serve` via python-dotenv).
+# Keep .env.example tracked as a template.
+.env
+!.env.example

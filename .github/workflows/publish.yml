@@ -27,6 +27,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Set up bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Stage frontend into Python package
+        run: |
+          mkdir -p adsb/static
+          find adsb/static -mindepth 1 ! -name .gitkeep -delete
+          cp -r frontend/dist/. adsb/static/
+
       - name: Set up uv
         # setup-uv does not publish a floating major tag; pin to a specific version.
         uses: astral-sh/setup-uv@v8.1.0

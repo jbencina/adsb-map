@@ -3,8 +3,11 @@
  */
 
 // API Configuration
-export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-export const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || ''
+// Runtime config (window.APP_CONFIG from /config.js) takes precedence over build-time
+// env vars so a single bundled wheel can serve any user without a per-token rebuild.
+const runtime = (typeof window !== 'undefined' && window.APP_CONFIG) || {}
+export const API_URL = runtime.apiUrl || import.meta.env.VITE_API_URL || ''
+export const MAPBOX_TOKEN = runtime.mapboxToken || import.meta.env.VITE_MAPBOX_TOKEN || ''
 
 // Map Configuration
 export const DEFAULT_MAP_CENTER = {

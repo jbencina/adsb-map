@@ -6,6 +6,7 @@ import click
 import uvicorn
 from dotenv import find_dotenv, load_dotenv
 
+from adsb import __version__
 from adsb.api import create_app
 from adsb.database import Database
 from adsb.decoder import ADSBDecoder
@@ -13,7 +14,7 @@ from adsb.network import start_network_client
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version=__version__)
 def main():
     """ADS-B decoder and REST API server using pyModeS."""
     # Load .env from the current working directory (or parents) if present.

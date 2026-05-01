@@ -1,6 +1,6 @@
 [project]
 name = "adsb-map"
-version = "0.1.1"
+dynamic = ["version"]
 description = "Python library for ADS-B decoding and REST API using pyModeS"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -47,8 +47,18 @@ Issues = "https://github.com/jbencina/adsb/issues"
 adsb = "adsb.cli:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# Version is derived from the latest git tag at build time. Tag `vX.Y.Z` to
+# release; no need to edit this file. Untagged commits get a dev version.
+[tool.hatch.version]
+source = "vcs"
+
+# Generate a version file the package can import to expose `__version__` at
+# runtime (used by the CLI banner and FastAPI `version=`).
+[tool.hatch.build.hooks.vcs]
+version-file = "adsb/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["adsb"]

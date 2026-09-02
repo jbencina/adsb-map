@@ -1,16 +1,53 @@
 """Command-line interface for ADS-B server."""
 
 import logging
+import os
 
 import click
 import uvicorn
 from dotenv import find_dotenv, load_dotenv
 
 from adsb import __version__
-from adsb.api import create_app
+from adsb.aircraft_db import AIRCRAFT_DB_ENV, aircraft_db_path
+from adsb.api import create_app, frontend_is_bundled
 from adsb.database import Database
 from adsb.decoder import ADSBDecoder
 from adsb.network import start_network_client
+
+AIRCRAFT_DB_URL = "https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz"
+
+
+def _echo_preflight(source: str, connect: tuple) -> None:
+    """Report the four things that otherwise fail silently at runtime.
+
+    Each of these leaves the server looking healthy while the map stays blank or
+    unenriched, so surface them once at startup instead of as buried log lines.
+    """
+    db = aircraft_db_path()
+    checks = [
+        (
+            frontend_is_bundled(),
+            "Map UI bundled",
+            "Map UI not built - API only; see `just build`",
+        ),
+        (
+            db.is_file(),
+            f"Aircraft database: {db}",
+            f"No aircraft database at {db} - run `adsb download` (or set {AIRCRAFT_DB_ENV})",
+        ),
+        (
+            bool(os.environ.get("MAPBOX_TOKEN")),
+            "Mapbox token set",
+            "MAPBOX_TOKEN unset - map tiles will not render",
+        ),
+        (
+            bool(source and connect),
+            "Data source configured",
+            "No data source - map stays empty; use --source net --connect HOST PORT TYPE",
+        ),
+    ]
+    for ok, good, bad in checks:
+        click.echo(f"  [{'ok' if ok else '!!'}] {good if ok else bad}")
 
 
 @click.group()
@@ -198,9 +235,12 @@ def serve(
     # Create FastAPI app with network client for graceful shutdown
     app = create_app(database, network_client)
 
+    click.echo("Startup checks:")
+    _echo_preflight(source, connect)
+
     # Start server
     # Note: Uvicorn handles signals and will trigger FastAPI lifespan shutdown
-    click.echo(f"Starting API server on {host}:{port}")
+    click.echo(f"Starting API server on http://{host}:{port}/")
     uvicorn.run(app, host=host, port=port, reload=reload, log_config=log_config)
 
 
@@ -337,13 +377,8 @@ def db_size(db_path: str):
 
 
 @main.command()
-@click.option(
-    "--data-dir",
-    default="data",
-    help="Directory to store the aircraft database",
-    show_default=True,
-)
-def download(data_dir: str):
+@click.option("--force", is_flag=True, help="Re-download even if the database is already present")
+def download(force: bool):
     """
     Download the aircraft database from tar1090-db.
 
@@ -351,76 +386,51 @@ def download(data_dir: str):
     tar1090-db repository. The database maps ICAO24 addresses to
     aircraft registration, type code, and descriptions.
 
+    Stored in a per-user data directory so it is found no matter which
+    directory `adsb serve` runs from. Override with ADSB_AIRCRAFT_DB.
+
     Example:
 
         adsb download
     """
     import gzip
-    import os
     import shutil
-    from pathlib import Path
     from urllib.request import Request, urlopen
 
-    # Create data directory if it doesn't exist
-    data_path = Path(data_dir)
-    data_path.mkdir(parents=True, exist_ok=True)
+    from adsb.aircraft_db import aircraft_db_path
 
-    db_url = "https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz"
-    db_gz_path = data_path / "aircraft.csv.gz"
-    db_csv_path = data_path / "aircraft.csv"
+    dest = aircraft_db_path()
+    if dest.is_file() and not force:
+        click.echo(f"Aircraft database already present: {dest}")
+        click.echo("Use --force to re-download.")
+        return
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # Decompress as it streams: no .gz copy is left behind, and a failed download
+    # never leaves a truncated CSV where the loader would find it.
+    tmp = dest.with_name(dest.name + ".partial")
 
     click.echo("Downloading aircraft database from tar1090-db...")
-    click.echo(f"Source: {db_url}")
+    click.echo(f"Source: {AIRCRAFT_DB_URL}")
 
     try:
-        # Download the file
-        req = Request(db_url, headers={"User-Agent": "adsb-map/0.1.0"})
+        req = Request(AIRCRAFT_DB_URL, headers={"User-Agent": f"adsb-map/{__version__}"})
         with urlopen(req, timeout=60) as response:
-            if response.status != 200:
-                click.echo(f"Error: Failed to download database (HTTP {response.status})", err=True)
-                return
-
-            # Get content length for progress
-            content_length = response.headers.get("Content-Length")
-            if content_length:
-                total_size = int(content_length)
-                click.echo(f"Downloading {total_size / 1024 / 1024:.1f} MB...")
-            else:
-                click.echo("Downloading...")
-
-            # Download to file
-            with open(db_gz_path, "wb") as f:
-                shutil.copyfileobj(response, f)
-
-        # Check file size
-        gz_size = os.path.getsize(db_gz_path)
-        click.echo(f"Downloaded: {gz_size / 1024 / 1024:.1f} MB")
-
-        # Extract the database
-        click.echo("Extracting database...")
-        with gzip.open(db_gz_path, "rb") as f_in:
-            with open(db_csv_path, "wb") as f_out:
-                shutil.copyfileobj(f_in, f_out)
-
-        csv_size = os.path.getsize(db_csv_path)
-        click.echo(f"Extracted: {csv_size / 1024 / 1024:.1f} MB")
-
-        # Count records
-        with open(db_csv_path, encoding="utf-8", errors="replace") as f:
-            record_count = sum(1 for _ in f)
-
-        click.echo("\nAircraft database downloaded successfully!")
-        click.echo(f"Location: {db_csv_path}")
-        click.echo(f"Records: {record_count:,}")
-
+            with gzip.GzipFile(fileobj=response) as gz, open(tmp, "wb") as f:
+                shutil.copyfileobj(gz, f)
+        tmp.replace(dest)
     except Exception as e:
+        tmp.unlink(missing_ok=True)
         click.echo(f"Error downloading database: {e}", err=True)
-        # Clean up partial downloads
-        if db_gz_path.exists():
-            db_gz_path.unlink()
-        if db_csv_path.exists():
-            db_csv_path.unlink()
         raise click.Abort() from e
+
+    with open(dest, encoding="utf-8", errors="replace") as f:
+        record_count = sum(1 for _ in f)
+
+    click.echo("\nAircraft database downloaded successfully!")
+    click.echo(f"Location: {dest}")
+    click.echo(f"Size: {dest.stat().st_size / 1024 / 1024:.1f} MB")
+    click.echo(f"Records: {record_count:,}")
 
 
 if __name__ == "__main__":

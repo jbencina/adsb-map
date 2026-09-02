@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Aircraft enrichment was silently broken on every `pip install`.** `adsb download`
+  wrote `./data/aircraft.csv` relative to the working directory, while the loader read
+  `<package parent>/data/aircraft.csv` — `site-packages/data/` in a wheel, which nothing
+  ever wrote to. Registration, type code, and type description came back `null` forever,
+  signalled only by a warning emitted lazily mid-decode. Both sides now resolve the same
+  per-user data directory via `aircraft_db.aircraft_db_path()`.
+- A source checkout with no frontend build returned a bare `{"detail":"Not Found"}` at
+  `/`, giving no hint that `just build` was the missing step. `/` now serves an
+  explanatory 503 page, and the accompanying log line is a warning rather than info.
+
+### Added
+- `adsb serve` prints startup checks for the four conditions that otherwise fail
+  silently: frontend bundled, aircraft database present, `MAPBOX_TOKEN` set, and data
+  source configured.
+- `ADSB_AIRCRAFT_DB` environment variable overrides the aircraft database location
+  (honoured from `.env` like `MAPBOX_TOKEN`).
+- `just bootstrap` installs bun; `just build` now fails with an actionable message when
+  bun is missing instead of a bare "command not found".
+- `adsb download --force`; without it the command is a no-op when the database is
+  already present rather than re-fetching ~9MB.
+
+### Changed
+- `adsb download` streams the gzip straight to CSV via a `.partial` temp file, so no
+  `aircraft.csv.gz` is left on disk and a failed download cannot leave a truncated CSV
+  where the loader would read it.
+- **Breaking:** `adsb download --data-dir` is removed; use `ADSB_AIRCRAFT_DB` instead.
+  Single supported location, single override mechanism.
+- **Breaking:** `AircraftDatabase` no longer auto-extracts a sibling `aircraft.csv.gz`;
+  `adsb download` is the one supported way to obtain the database.
+- `adsb.api._frontend_is_bundled` is now public `frontend_is_bundled` (used by the CLI
+  preflight).
+
+### Removed
+- `MANIFEST.in`, which was dead — hatchling ignores it, and its `recursive-include adsb
+  *.py` would have *excluded* the bundled frontend had anything honoured it.
+
 ## [0.2.0] - 2026-05-01
 
 ### Added

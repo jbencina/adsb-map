@@ -6,57 +6,59 @@ to enrich aircraft data with registration, type code, and manufacturer informati
 
 import csv
 import logging
+import os
 from pathlib import Path
 
+from platformdirs import user_data_dir
+
 logger = logging.getLogger(__name__)
+
+#: Environment variable overriding the aircraft database location.
+AIRCRAFT_DB_ENV = "ADSB_AIRCRAFT_DB"
+
+
+def aircraft_db_path() -> Path:
+    """Resolve the aircraft CSV location.
+
+    Single source of truth shared by `adsb download` (which writes the file) and
+    `AircraftDatabase` (which reads it), so the two can never disagree. Resolves to
+    a per-user data directory rather than a path relative to the CWD or to the
+    installed package -- the latter silently broke enrichment for pip installs,
+    since nothing ever wrote to `site-packages/data/`.
+
+    Returns:
+        Path to `aircraft.csv`, overridable via the `ADSB_AIRCRAFT_DB` env var.
+    """
+    override = os.environ.get(AIRCRAFT_DB_ENV)
+    return Path(override) if override else Path(user_data_dir("adsb-map")) / "aircraft.csv"
 
 
 class AircraftDatabase:
     """Aircraft database for looking up aircraft information by ICAO24 address."""
 
-    def __init__(self, db_path: str | None = None):
+    def __init__(self, db_path: str | Path | None = None):
         """Initialize the aircraft database.
 
         Args:
-            db_path: Path to the aircraft CSV database file. If None, uses default path.
+            db_path: Path to the aircraft CSV file. Defaults to `aircraft_db_path()`.
         """
+        self.path = Path(db_path) if db_path else aircraft_db_path()
         self.aircraft_data: dict[str, dict[str, str]] = {}
-        self._load_database(db_path)
+        self._load_database()
 
-    def _load_database(self, db_path: str | None = None) -> None:
-        """Load the aircraft database from CSV file.
-
-        Args:
-            db_path: Path to the aircraft CSV database file.
-        """
-        if db_path is None:
-            # Default path relative to this module
-            module_dir = Path(__file__).parent.parent
-            db_path = module_dir / "data" / "aircraft.csv"
-        else:
-            db_path = Path(db_path)
-
-        # If CSV doesn't exist but .gz does, extract it
-        if not db_path.exists():
-            gz_path = Path(str(db_path) + ".gz")
-            if gz_path.exists():
-                logger.info(f"Extracting aircraft database from {gz_path}")
-                import gzip
-                import shutil
-
-                with gzip.open(gz_path, "rb") as f_in:
-                    with open(db_path, "wb") as f_out:
-                        shutil.copyfileobj(f_in, f_out)
-                logger.info(f"Extracted to {db_path}")
-
-        if not db_path.exists():
-            logger.warning(f"Aircraft database not found at {db_path}")
+    def _load_database(self) -> None:
+        """Load the aircraft database from CSV, leaving it empty if absent."""
+        if not self.path.is_file():
+            logger.warning(
+                f"Aircraft database not found at {self.path} - "
+                "run `adsb download` to enable registration/type lookup"
+            )
             return
 
-        logger.info(f"Loading aircraft database from {db_path}")
+        logger.info(f"Loading aircraft database from {self.path}")
 
         try:
-            with open(db_path, encoding="utf-8", errors="replace") as f:
+            with open(self.path, encoding="utf-8", errors="replace") as f:
                 reader = csv.reader(f, delimiter=";")
 
                 for row in reader:

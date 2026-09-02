@@ -19,7 +19,7 @@ You only need Python — no Node, no bun, no Docker.
 
 ```bash
 pip install adsb-map
-adsb download                                # one-time: aircraft database
+adsb download                                # one-time: aircraft database (~30MB)
 
 # Free Mapbox token: https://account.mapbox.com/access-tokens/
 # Either export it in your shell, or drop it in a `.env` file in the directory
@@ -51,6 +51,12 @@ Visit http://localhost:8000/. Aircraft show up as markers; click one for its tra
 | Database path | `./adsb.db` | `adsb serve --db-path` |
 | Stale timeout | `60s` | `adsb serve --stale-timeout` |
 | Receiver lat/lon | (none) | `adsb serve --lat --lon` (recommended) |
+| Aircraft database | per-user data dir | `ADSB_AIRCRAFT_DB` env var, or `.env` file in CWD |
+
+`adsb download` writes the aircraft database to a per-user data directory
+(`~/.local/share/adsb-map/aircraft.csv` on Linux) rather than the working directory, so
+`adsb serve` finds it no matter where you launch it from. `adsb serve` prints a startup
+check confirming whether it was found.
 
 `--lat` and `--lon` are strongly recommended: ADS-B position messages use Compact Position
 Reporting (CPR), which decodes faster and more accurately when given a reference position
@@ -60,7 +66,7 @@ within ~180 NM of the receiver.
 
 ```bash
 adsb serve …      # API + bundled map UI
-adsb download     # download tar1090-db aircraft database
+adsb download     # download tar1090-db aircraft database (--force to refresh)
 adsb init-db      # create SQLite tables
 adsb decode HEX   # decode a single message and store it
 adsb cleanup      # remove aircraft not seen in --stale-timeout
@@ -104,12 +110,17 @@ and prunes stale aircraft every 30 seconds.
 ## Develop from source
 
 The repo uses [`just`](https://github.com/casey/just) to run backend and frontend together
-with hot reload. Install [`uv`](https://docs.astral.sh/uv/), [`bun`](https://bun.sh), and
-`just`, then:
+with hot reload. Building the UI from source needs a JS toolchain — end users installing
+the wheel do not.
 
 ```bash
+# Prerequisites (once per machine)
+curl -LsSf https://astral.sh/uv/install.sh | sh     # uv
+uv tool install rust-just                           # just (distro packages are often stale)
+
 git clone https://github.com/jbencina/adsb-map.git
 cd adsb-map
+just bootstrap                                # installs bun if missing
 uv sync --dev
 uv run adsb download                          # one-time
 
@@ -125,7 +136,7 @@ port 8000, so the frontend hits the API as if it were same-origin.
 To exercise the production-style single-process bundle locally:
 
 ```bash
-just build                                                # frontend → adsb/static/
+just build                                                # frontend → adsb/static/ (needs bun)
 MAPBOX_TOKEN=pk.… just serve --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 # Visit http://localhost:8000/
 ```
@@ -166,7 +177,7 @@ unzip -l dist/adsb_map-*.whl | grep adsb/static/
 | `models.py` | SQLAlchemy ORM: `Aircraft`, `AircraftPosition`, `AircraftMetadata` |
 | `database.py` | Session/engine management with context-manager pattern |
 | `schemas.py` | Pydantic response models |
-| `aircraft_db.py` | Lazy-loaded singleton CSV (566k+ rows) → registration/type lookup |
+| `aircraft_db.py` | Lazy-loaded singleton CSV (566k+ rows) → registration/type lookup; owns `aircraft_db_path()`, the one location both `download` and the loader use |
 | `cli.py` | Click CLI: `serve`, `download`, `init-db`, `decode`, `cleanup`, `db-size` |
 | `static/` | Built frontend assets (populated by `just build` or CI; gitignored) |
 

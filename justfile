@@ -12,10 +12,27 @@ dev *ARGS:
     (cd frontend && bun run dev) &
     wait
 
+# Install the frontend toolchain. Run once on a fresh checkout.
+bootstrap:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v bun >/dev/null 2>&1; then
+        echo "bun $(bun --version) already installed"
+    else
+        curl -fsSL https://bun.sh/install | bash
+        echo 'bun installed - add to PATH: export PATH="$HOME/.bun/bin:$PATH"'
+    fi
+
 # Build frontend and stage into adsb/static for a single-process run / wheel build.
 # Preserves the tracked .gitkeep so `git status` stays clean after building.
 build:
-    cd frontend && bun install && bun run build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v bun >/dev/null 2>&1 || {
+        echo "error: bun not found. Run \`just bootstrap\` (or see https://bun.sh)." >&2
+        exit 1
+    }
+    (cd frontend && bun install && bun run build)
     mkdir -p adsb/static
     find adsb/static -mindepth 1 ! -name .gitkeep -delete
     cp -r frontend/dist/. adsb/static/

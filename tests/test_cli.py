@@ -107,6 +107,18 @@ def no_uvicorn(monkeypatch):
     return launched
 
 
+@pytest.fixture
+def built_frontend(tmp_path, monkeypatch):
+    """Point adsb.ui at a minimal built frontend."""
+    import adsb.ui
+
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html></html>")
+    monkeypatch.setattr(adsb.ui, "STATIC_DIR", static_dir)
+    return static_dir
+
+
 def test_ui_requires_built_frontend(tmp_path, monkeypatch, no_uvicorn):
     """`adsb start frontend` on a source checkout without `just build` fails with guidance, not a 503."""
     import adsb.ui
@@ -119,14 +131,7 @@ def test_ui_requires_built_frontend(tmp_path, monkeypatch, no_uvicorn):
     assert "Frontend not bundled" in result.output
 
 
-def test_ui_rejects_url_without_scheme(tmp_path, monkeypatch, no_uvicorn):
-    import adsb.ui
-
-    static_dir = tmp_path / "static"
-    (static_dir / "assets").mkdir(parents=True)
-    (static_dir / "index.html").write_text("<html></html>")
-    monkeypatch.setattr(adsb.ui, "STATIC_DIR", static_dir)
-
+def test_ui_rejects_url_without_scheme(built_frontend, no_uvicorn):
     result = CliRunner().invoke(main, ["start", "frontend", "--api-url", "receiver:8000"])
 
     assert result.exit_code != 0
@@ -134,12 +139,6 @@ def test_ui_rejects_url_without_scheme(tmp_path, monkeypatch, no_uvicorn):
 
 
 def test_ui_launches_proxy_app(tmp_path, monkeypatch, no_uvicorn):
-    import adsb.ui
-
-    static_dir = tmp_path / "static"
-    (static_dir / "assets").mkdir(parents=True)
-    (static_dir / "index.html").write_text("<html></html>")
-    monkeypatch.setattr(adsb.ui, "STATIC_DIR", static_dir)
     monkeypatch.chdir(tmp_path)  # keep the repo's own .env out of the picture
     monkeypatch.delenv("MAPBOX_TOKEN", raising=False)
 
@@ -155,12 +154,6 @@ def test_ui_launches_proxy_app(tmp_path, monkeypatch, no_uvicorn):
 
 def test_frontend_defaults_to_local_backend(tmp_path, monkeypatch, no_uvicorn):
     """Single-machine use is just `adsb start backend` + `adsb start frontend`."""
-    import adsb.ui
-
-    static_dir = tmp_path / "static"
-    (static_dir / "assets").mkdir(parents=True)
-    (static_dir / "index.html").write_text("<html></html>")
-    monkeypatch.setattr(adsb.ui, "STATIC_DIR", static_dir)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MAPBOX_TOKEN", "pk.local")
     monkeypatch.delenv("ADSB_API_URL", raising=False)

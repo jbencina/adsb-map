@@ -2,6 +2,7 @@
 
 import logging
 import os
+import warnings
 
 import click
 import uvicorn
@@ -17,48 +18,47 @@ from adsb.status import StatusReporter
 from adsb.ui import DEFAULT_API_URL, create_ui_app
 
 AIRCRAFT_DB_URL = "https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz"
+DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 
 class DropNoiseFilter(logging.Filter):
-    """Drop uvicorn warnings that carry no actionable information.
-
-    "Invalid HTTP request received." fires whenever something non-HTTP touches
-    the port -- a browser trying HTTPS, a LAN device probing, a port scanner.
-    On a receiver bound to 0.0.0.0 that is routine background noise.
-    """
-
-    NOISE = ("Invalid HTTP request received",)
+    """Drop uvicorn's warning for non-HTTP bytes on the port (HTTPS attempts, LAN probes)."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        return not record.getMessage().startswith(self.NOISE)
+        return "Invalid HTTP request received" not in record.getMessage()
+
+
+def _console_handler(fmt: str) -> logging.StreamHandler:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(fmt, datefmt=DATEFMT))
+    return handler
+
+
+def _isolated_logger(name: str, fmt: str, level: int = logging.INFO) -> None:
+    """Give a logger its own console format and stop it propagating to root."""
+    log = logging.getLogger(name)
+    log.setLevel(level)
+    log.addHandler(_console_handler(fmt))
+    log.propagate = False
 
 
 def _echo_checks(checks: list[tuple[bool, str, str]]) -> None:
-    """Print startup checks for things that otherwise fail silently at runtime.
-
-    Each leaves the process looking healthy while the map stays blank or
-    unenriched, so surface them once at startup instead of as buried log lines.
-    """
+    """Print (ok, message-if-ok, message-if-not) checks for things that fail silently."""
     click.echo("Startup checks:")
     for ok, good, bad in checks:
         click.echo(f"  [{'ok' if ok else '!!'}] {good if ok else bad}")
 
 
 def aircraft_db_option(f):
-    """`--aircraft-db PATH` for every command that reads or writes the aircraft CSV.
-
-    Applied eagerly (`is_eager`) so the override is installed before the command
-    body -- and anything it imports lazily -- resolves the path.
-    """
+    """`--aircraft-db PATH`, applied eagerly so it is set before the command body runs."""
 
     def _apply(ctx, param, value):
         if value:
             set_aircraft_db_path(value)
-        return value
 
     return click.option(
         "--aircraft-db",
-        type=click.Path(dir_okay=False, path_type=str),
+        type=click.Path(dir_okay=False),
         metavar="PATH",
         is_eager=True,
         expose_value=False,
@@ -77,6 +77,7 @@ def main():
     # module's location, which under pytest/CliRunner doesn't match the user's CWD.
     # `override=False` so explicit `MAPBOX_TOKEN=… adsb start backend` still beats a stale .env.
     load_dotenv(find_dotenv(usecwd=True), override=False)
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
 @main.group()
@@ -164,63 +165,25 @@ def backend(
         # With a network data source
         adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
     """
-    # Suppress deprecation warnings from dependencies
-    import warnings
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.addHandler(_console_handler("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+    _isolated_logger("adsb.data", "%(asctime)s - [ADSB] %(levelname)s - %(message)s")
+    _isolated_logger("adsb.status", "%(asctime)s - [STATUS] %(message)s")
+    logging.getLogger("adsb.decoder").setLevel(logging.WARNING)  # per-aircraft chatter
 
-    warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-    # Configure logging with different formats for different loggers
-    # Root logger configuration
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-
-    # Create console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-
-    # Default formatter for other loggers
-    default_formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-    )
-
-    console_handler.setFormatter(default_formatter)
-    root_logger.addHandler(console_handler)
-
-    # Configure ADSB data logger separately
-    adsb_formatter = logging.Formatter(
-        "%(asctime)s - [ADSB] %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    adsb_logger = logging.getLogger("adsb.data")
-    adsb_logger.setLevel(logging.INFO)
-    adsb_handler = logging.StreamHandler()
-    adsb_handler.setFormatter(adsb_formatter)
-    adsb_logger.addHandler(adsb_handler)
-    adsb_logger.propagate = False  # Don't propagate to root logger
-
-    # Set decoder logger to WARNING to reduce noise (individual aircraft updates)
-    logging.getLogger("adsb.decoder").setLevel(logging.WARNING)
-
-    # Periodic status line gets its own prefix, like [ADSB] and [API].
-    status_logger = logging.getLogger("adsb.status")
-    status_handler = logging.StreamHandler()
-    status_handler.setFormatter(
-        logging.Formatter("%(asctime)s - [STATUS] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-    )
-    status_logger.addHandler(status_handler)
-    status_logger.propagate = False
-
-    # Custom uvicorn log config to add [API] prefix to access logs
+    # uvicorn configures its own loggers; give access logs an [API] prefix.
     log_config = {
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": {
             "api": {
                 "format": "%(asctime)s - [API] %(levelname)s - %(message)s",
-                "datefmt": "%Y-%m-%d %H:%M:%S",
+                "datefmt": DATEFMT,
             },
             "default": {
                 "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                "datefmt": "%Y-%m-%d %H:%M:%S",
+                "datefmt": DATEFMT,
             },
         },
         "filters": {
@@ -247,7 +210,7 @@ def backend(
             },
             "uvicorn.error": {
                 "handlers": ["default"],
-                "level": "WARNING",  # Only show warnings/errors, not startup messages
+                "level": "WARNING",  # hide uvicorn's own startup banner
                 "propagate": False,
             },
         },
@@ -309,13 +272,12 @@ def backend(
     if stats_interval > 0:
         reporter = StatusReporter(database, network_client, interval=stats_interval).start()
 
-    # Start server
-    # Note: Uvicorn handles signals and will trigger FastAPI lifespan shutdown
+    # uvicorn handles signals and triggers the FastAPI lifespan shutdown.
     click.echo(f"Starting API server on http://{host}:{port}/")
     try:
         uvicorn.run(app, host=host, port=port, reload=reload, log_config=log_config)
     finally:
-        if reporter is not None:
+        if reporter:
             reporter.stop()
 
 
@@ -351,13 +313,10 @@ def frontend(api_url: str, host: str, port: int):
         # Backend on the receiver
         adsb start frontend --api-url http://receiver.local:8000
     """
-    import warnings
-
-    warnings.filterwarnings("ignore", category=DeprecationWarning)
     logging.basicConfig(
         level=logging.WARNING,
         format="%(asctime)s - [UI] %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        datefmt=DATEFMT,
     )
 
     try:

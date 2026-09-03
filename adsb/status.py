@@ -23,13 +23,10 @@ logger = logging.getLogger("adsb.status")
 def tracked_counts(database: Database) -> tuple[int, int]:
     """Return (aircraft currently tracked, of which have a position)."""
     with database.get_session() as session:
-        total = session.query(func.count(Aircraft.id)).scalar() or 0
-        with_pos = (
-            session.query(func.count(Aircraft.id))
-            .filter(Aircraft.latitude.isnot(None), Aircraft.longitude.isnot(None))
-            .scalar()
-            or 0
-        )
+        # count(column) skips NULLs; latitude and longitude are always set together.
+        total, with_pos = session.query(
+            func.count(Aircraft.id), func.count(Aircraft.latitude)
+        ).one()
     return total, with_pos
 
 
@@ -45,19 +42,9 @@ def format_status(
     """
     Render one status line.
 
-    Parameters
-    ----------
-    feed : str or None
-        Human-readable feed description (``host:port (beast)``) or None if no
-        data source is configured
-    stats : dict or None
-        Output of :meth:`ADSBNetworkClient.snapshot`, or None without a feed
-    tracked, tracked_with_position : int
-        Aircraft rows in the database, and those with a decoded position
-    interval : float
-        Seconds covered by ``stats["interval"]`` (for the rate)
-    now : float, optional
-        Current time, injectable for tests
+    ``feed`` is ``host:port (type)`` or None without a data source; ``stats`` is
+    :meth:`ADSBNetworkClient.snapshot` output covering ``interval`` seconds.
+    ``now`` is injectable for tests.
     """
     tracking = f"tracking {tracked} ac ({tracked_with_position} w/ pos)"
     if feed is None or stats is None:
@@ -131,7 +118,7 @@ class StatusReporter:
         return f"{self.client.host}:{self.client.port} ({self.client.datatype})"
 
     def tick(self) -> str:
-        """Build and emit one status line (also used directly by tests)."""
+        """Build and emit one status line."""
         stats = self.client.snapshot() if self.client is not None else None
         tracked, with_pos = tracked_counts(self.database)
         line = format_status(
@@ -148,7 +135,7 @@ class StatusReporter:
         while not self._stop.wait(self.interval):
             try:
                 self.tick()
-            except Exception as e:  # never let a stats hiccup kill the reporter
+            except Exception as e:  # a stats hiccup must not kill the thread
                 logger.warning("status line failed: %s", e)
 
     def start(self) -> "StatusReporter":

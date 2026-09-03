@@ -57,8 +57,7 @@ class ADSBNetworkClient(TcpClient):
         self.last_cleanup = time.time()
         self._stop_event = threading.Event()
 
-        # Counters are written by the client thread and read by the status
-        # reporter thread; the lock keeps snapshot() atomic.
+        # Written by the client thread, read by the status reporter thread.
         self._lock = threading.Lock()
         self.last_message_at: float | None = None
         self._interval = self._empty_interval()
@@ -81,28 +80,17 @@ class ADSBNetworkClient(TcpClient):
         """
         Return decoding statistics and reset the per-interval counters.
 
-        Called by the status reporter once per interval. Totals accumulate
-        for the life of the process.
-
         Returns
         -------
         dict
             ``interval`` (counts since the previous snapshot), ``total``
-            (cumulative counts), and ``last_message_at`` (epoch seconds of the
-            most recent message from the feed, or None if nothing yet)
+            (cumulative counts) and ``last_message_at`` (epoch seconds of the
+            most recent feed message, or None if nothing has arrived)
         """
         with self._lock:
-            interval = self._interval
-            self._interval = self._empty_interval()
+            interval, self._interval = self._interval, self._empty_interval()
             return {
-                "interval": {
-                    "messages_received": interval["messages_received"],
-                    "messages_processed": interval["messages_processed"],
-                    "messages_invalid": interval["messages_invalid"],
-                    "positions_decoded": interval["positions_decoded"],
-                    "aircraft_seen": len(interval["aircraft_seen"]),
-                    "errors": interval["errors"],
-                },
+                "interval": {**interval, "aircraft_seen": len(interval["aircraft_seen"])},
                 "total": {
                     "messages_processed": self.total_messages,
                     "positions_decoded": self.total_positions,
@@ -123,9 +111,8 @@ class ADSBNetworkClient(TcpClient):
         if not messages:
             return
 
-        with self._lock:
-            self._interval["messages_received"] += len(messages)
-            self.last_message_at = time.time()
+        batch = self._empty_interval()
+        batch["messages_received"] = len(messages)
 
         with self.database.get_session() as session:
             decoder = ADSBDecoder(
@@ -136,34 +123,37 @@ class ADSBNetworkClient(TcpClient):
             )
 
             for msg, ts in messages:
-                # Skip invalid message lengths
                 if len(msg) not in [14, 28]:
-                    with self._lock:
-                        self._interval["messages_invalid"] += 1
+                    batch["messages_invalid"] += 1
                     continue
-
                 try:
                     result = decoder.process_message(msg, timestamp=ts)
                 except Exception as e:
-                    with self._lock:
-                        self._interval["errors"] += 1
+                    batch["errors"] += 1
                     adsb_logger.debug(f"Error processing message {msg}: {e}")
                     continue
+                batch["messages_processed"] += 1
+                if result is not None:
+                    batch["aircraft_seen"].add(result.icao24)
+                    if result.latitude is not None and result.longitude is not None:
+                        batch["positions_decoded"] += 1
 
-                has_position = (
-                    result is not None
-                    and result.latitude is not None
-                    and result.longitude is not None
-                )
-                with self._lock:
-                    self._interval["messages_processed"] += 1
-                    self.total_messages += 1
-                    if result is not None:
-                        self._interval["aircraft_seen"].add(result.icao24)
-                        self.total_aircraft.add(result.icao24)
-                    if has_position:
-                        self._interval["positions_decoded"] += 1
-                        self.total_positions += 1
+            # One lock per batch rather than per message; the reporter only
+            # needs a consistent view, not real-time updates.
+            with self._lock:
+                self.last_message_at = time.time()
+                for key in (
+                    "messages_received",
+                    "messages_processed",
+                    "messages_invalid",
+                    "positions_decoded",
+                    "errors",
+                ):
+                    self._interval[key] += batch[key]
+                self._interval["aircraft_seen"] |= batch["aircraft_seen"]
+                self.total_messages += batch["messages_processed"]
+                self.total_positions += batch["positions_decoded"]
+                self.total_aircraft |= batch["aircraft_seen"]
 
             # Periodically cleanup stale aircraft
             current_time = time.time()

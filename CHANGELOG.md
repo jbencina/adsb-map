@@ -54,14 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `aircraft.csv.gz` is left on disk and a failed download cannot leave a truncated CSV
   where the loader would read it.
 - **Breaking:** `adsb download --data-dir` is removed; use `--aircraft-db PATH` instead
-  (same flag on `serve` and `decode`). Single supported location, single override
-  mechanism.
+  (same flag on `start backend` and `decode`). Single supported location, single
+  override mechanism.
 - `.env` is for secrets only (`MAPBOX_TOKEN`); every other setting is a CLI argument.
   Configuration is never read from `ADSB_*` environment variables.
 - CORS middleware is removed from the backend: every browser path (bundled UI and Vite
   dev server) reaches the API through a same-origin proxy.
-- Static-file and SPA helpers moved from `adsb.api` to `adsb.ui` (`STATIC_DIR`,
-  `frontend_is_bundled`, `create_ui_app`).
+- Everything browser-facing (static files, SPA fallback, `/config.js`) moved from
+  `adsb.api` to the new `adsb.ui` module; `adsb.api` is JSON only.
 - `httpx` is now a runtime dependency (used by the `adsb start frontend` proxy).
 - Per-request HTTP access logging on the backend is off by default (the map polls
   `/api/all` every second, drowning everything else); `--access-log` re-enables it.
@@ -72,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argument and `_log_telemetry` are gone.
 - **Breaking:** `AircraftDatabase` no longer auto-extracts a sibling `aircraft.csv.gz`;
   `adsb download` is the one supported way to obtain the database.
-- `adsb.api._frontend_is_bundled` is now public `adsb.ui.frontend_is_bundled`.
+- `adsb.api._frontend_is_bundled` is now `adsb.ui.frontend_is_bundled`.
 
 ### Removed
 - `MANIFEST.in`, which was dead — hatchling ignores it, and its `recursive-include adsb
@@ -165,4 +165,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions CI workflow testing Python 3.12 and 3.13
 - Tox configuration for multi-version testing
 - Complete API documentation in README
-

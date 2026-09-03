@@ -19,6 +19,20 @@ from adsb.ui import DEFAULT_API_URL, create_ui_app
 AIRCRAFT_DB_URL = "https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz"
 
 
+class DropNoiseFilter(logging.Filter):
+    """Drop uvicorn warnings that carry no actionable information.
+
+    "Invalid HTTP request received." fires whenever something non-HTTP touches
+    the port -- a browser trying HTTPS, a LAN device probing, a port scanner.
+    On a receiver bound to 0.0.0.0 that is routine background noise.
+    """
+
+    NOISE = ("Invalid HTTP request received",)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not record.getMessage().startswith(self.NOISE)
+
+
 def _echo_checks(checks: list[tuple[bool, str, str]]) -> None:
     """Print startup checks for things that otherwise fail silently at runtime.
 
@@ -209,6 +223,9 @@ def backend(
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             },
         },
+        "filters": {
+            "drop_noise": {"()": "adsb.cli.DropNoiseFilter"},
+        },
         "handlers": {
             "api": {
                 "formatter": "api",
@@ -219,6 +236,7 @@ def backend(
                 "formatter": "default",
                 "class": "logging.StreamHandler",
                 "stream": "ext://sys.stdout",
+                "filters": ["drop_noise"],
             },
         },
         "loggers": {

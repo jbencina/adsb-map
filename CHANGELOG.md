@@ -65,6 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `httpx` is now a runtime dependency (used by the `adsb start frontend` proxy).
 - Per-request HTTP access logging on the backend is off by default (the map polls
   `/api/all` every second, drowning everything else); `--access-log` re-enables it.
+- uvicorn's "Invalid HTTP request received." warning is filtered out of the backend
+  console. It fires whenever non-HTTP bytes hit the port (a browser trying HTTPS, a LAN
+  device probing) and is routine noise on a server bound to `0.0.0.0`.
 - `ADSBNetworkClient` exposes `snapshot()` for thread-safe stats; the `telemetry_interval`
   argument and `_log_telemetry` are gone.
 - **Breaking:** `AircraftDatabase` no longer auto-extracts a sibling `aircraft.csv.gz`;

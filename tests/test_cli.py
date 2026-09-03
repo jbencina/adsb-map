@@ -244,3 +244,27 @@ def test_backend_access_log_off_by_default(tmp_path, monkeypatch, no_uvicorn):
         main, ["start", "backend", "--db-path", str(tmp_path / "t.db"), "--access-log"]
     )
     assert no_uvicorn["log_config"]["loggers"]["uvicorn.access"]["level"] == "INFO"
+
+
+def test_backend_log_config_drops_invalid_http_noise(tmp_path, monkeypatch, no_uvicorn):
+    """Non-HTTP bytes on the port (HTTPS probes, scanners) must not spam the console."""
+    import logging.config
+
+    from adsb.cli import DropNoiseFilter
+
+    monkeypatch.chdir(tmp_path)
+    CliRunner().invoke(main, ["start", "backend", "--db-path", str(tmp_path / "t.db")])
+    config = no_uvicorn["log_config"]
+    assert "drop_noise" in config["handlers"]["default"]["filters"]
+
+    logging.config.dictConfig(config)  # must be a valid dictConfig, filter resolvable
+    handler = logging.getLogger("uvicorn.error").handlers[0]
+    noise = logging.LogRecord(
+        "uvicorn.error", logging.WARNING, "", 0, "Invalid HTTP request received.", None, None
+    )
+    real = logging.LogRecord(
+        "uvicorn.error", logging.WARNING, "", 0, "Unsupported upgrade request.", None, None
+    )
+    assert not handler.filter(noise)
+    assert handler.filter(real)
+    assert isinstance(handler.filters[0], DropNoiseFilter)

@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -106,36 +105,6 @@ def frontend_is_bundled(static_dir: Path | None = None) -> bool:
     return static_dir.is_dir() and (static_dir / "index.html").is_file()
 
 
-def parse_cors_origins(value: str | Iterable[str] | None) -> list[str]:
-    """
-    Normalise a CORS origin list from CLI/env input.
-
-    Accepts a comma- or whitespace-separated string (the ``--cors-origins`` /
-    ``ADSB_CORS_ORIGINS`` form) or an iterable of origins. Trailing slashes are
-    stripped because browsers send ``Origin`` without one, and Starlette matches
-    the header verbatim.
-
-    Parameters
-    ----------
-    value : str or iterable of str or None
-        Raw origin specification
-
-    Returns
-    -------
-    list[str]
-        De-duplicated origins in input order; ``["*"]`` if any entry is ``*``
-    """
-    if value is None:
-        return []
-    parts = value.replace(",", " ").split() if isinstance(value, str) else list(value)
-    origins: list[str] = []
-    for part in parts:
-        origin = part.strip().rstrip("/")
-        if origin and origin not in origins:
-            origins.append(origin)
-    return ["*"] if "*" in origins else origins
-
-
 def mount_spa(app: FastAPI, static_dir: Path) -> None:
     """
     Serve the built frontend from ``static_dir`` with an SPA fallback.
@@ -169,7 +138,6 @@ def create_app(
     network_client=None,
     *,
     serve_ui: bool = True,
-    cors_origins: Iterable[str] | None = None,
 ) -> FastAPI:
     """
     Create and configure FastAPI application.
@@ -183,11 +151,6 @@ def create_app(
     serve_ui : bool, optional
         Serve the bundled map UI at ``/`` when it is available. Pass ``False``
         to run API-only (the UI is hosted elsewhere, e.g. via ``adsb start frontend``).
-    cors_origins : iterable of str, optional
-        Extra browser origins allowed to call ``/api/*`` cross-origin. Use
-        ``["*"]`` to allow any origin. Needed when the UI is served from a
-        different host/port than this API and does not proxy through
-        ``adsb start frontend`` or the Vite dev server.
 
     Returns
     -------
@@ -216,16 +179,13 @@ def create_app(
 
     ui_enabled = serve_ui and frontend_is_bundled()
 
-    # Same-origin serving needs no CORS. Whenever the UI lives elsewhere (dev
-    # server, `adsb start frontend` on another machine, static hosting), allow the local dev
-    # origins automatically plus whatever the operator configured explicitly.
-    origins = parse_cors_origins(cors_origins)
-    if not ui_enabled and origins != ["*"]:
-        origins = parse_cors_origins([*origins, *DEV_CORS_ORIGINS])
-    if origins:
+    # CORS is only needed by the Vite dev server hitting this API directly.
+    # `adsb start frontend` proxies server-to-server, and a bundled UI is
+    # same-origin, so neither needs it.
+    if not ui_enabled:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=origins,
+            allow_origins=list(DEV_CORS_ORIGINS),
             allow_credentials=False,
             allow_methods=["GET"],
             allow_headers=["*"],

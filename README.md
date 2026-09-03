@@ -43,8 +43,8 @@ To run the map on a different machine from the receiver, see
 - **REST API** — FastAPI endpoints under `/api/*`, jet1090-compatible
 - **SQLite storage** — aircraft state, position history, reception metadata
 - **Interactive map** — React + Mapbox GL, served same-origin from the wheel
-- **Split deployment** — `adsb start backend --no-ui` on the receiver, `adsb start frontend` (or any static host)
-  as the client elsewhere
+- **Split deployment** — `adsb start backend --no-ui` on the receiver, `adsb start frontend`
+  as the client on any other machine
 - **Network data sources** — connects to dump1090 / readsb / modesdeco2 over TCP (Beast or raw)
 
 ## Configuration
@@ -61,7 +61,6 @@ Everything is a CLI argument except the Mapbox token. `.env` is for secrets only
 | Receiver lat/lon | (none) | `adsb start backend --lat --lon` (recommended) |
 | Aircraft database | per-user data dir | `--aircraft-db PATH` on `serve`, `download`, `decode` |
 | Serve the map UI | yes, if bundled | `adsb start backend --no-ui` (API only) |
-| CORS origins | none (dev-server origins when UI is not served) | `adsb start backend --cors-origins` |
 | Backend for `adsb start frontend` | (required) | `adsb start frontend --api-url` |
 
 `adsb download` writes the aircraft database to a per-user data directory
@@ -108,10 +107,9 @@ client (mobile, monitoring system, dashboard, etc.) against `/api/*`.
 ## Split deployment: backend and frontend on different machines
 
 The receiver host (a Raspberry Pi next to the SDR, say) runs only the decoder and API.
-The map runs wherever you want to look at it. Three ways to run the client, in order of
-how little setup they need:
+The map runs wherever you want to look at it. Two ways to run the client:
 
-### 1. `adsb start frontend` — Python only, no CORS
+### 1. `adsb start frontend` — Python only
 
 ```bash
 # On the receiver:
@@ -139,20 +137,6 @@ ADSB_API_URL=http://receiver.local:8000 bun run dev        # or: just dev-fronte
 
 `ADSB_API_URL` (a shell variable on the command line, not a `.env` entry) is the proxy
 target for `/api/*` and `/config.js`. Same story for `bun run preview` after a build.
-
-### 3. Static hosting — nginx, S3, GitHub Pages, …
-
-Every release attaches `adsb-map-ui-vX.Y.Z.zip` (or build it with `cd frontend && bun run
-build`). Unzip it on any static host, then copy `config.example.js` to `config.js` next to
-`index.html` and fill in `apiUrl` and `mapboxToken`. The browser now calls the backend
-directly, so the backend must allow that page's origin:
-
-```bash
-adsb start backend --cors-origins https://maps.example.com …      # comma-separated; '*' allows any
-```
-
-Origins are matched exactly (scheme, host, port). The API only ever needs `GET`, and CORS
-is enabled with credentials disabled.
 
 ## Network data sources
 
@@ -237,7 +221,7 @@ unzip -l dist/adsb_map-*.whl | grep adsb/static/
 |---|---|
 | `decoder.py` | pyModeS-based message decoding, CPR positions, DB enrichment |
 | `network.py` | `ADSBNetworkClient` — daemon thread reading from dump1090/readsb |
-| `api.py` | FastAPI app — `/api/*` JSON, bundled SPA at `/` (unless `--no-ui`), runtime `/config.js`, configurable CORS |
+| `api.py` | FastAPI app — `/api/*` JSON, bundled SPA at `/` (unless `--no-ui`), runtime `/config.js` |
 | `ui.py` | `adsb start frontend` — serves the bundled SPA and reverse-proxies `/api/*` to a remote backend |
 | `models.py` | SQLAlchemy ORM: `Aircraft`, `AircraftPosition`, `AircraftMetadata` |
 | `database.py` | Session/engine management with context-manager pattern |
@@ -258,8 +242,6 @@ CI (`.github/workflows/publish.yml`) handles all of this on a `v*` tag push:
 3. `uv build` packages the wheel — `adsb/static/**` is included via the `artifacts`
    declaration in `pyproject.toml`
 4. `uv publish --trusted-publishing always` ships to PyPI via OIDC (no API tokens stored)
-5. `frontend/dist/` plus `config.example.js` is zipped as `adsb-map-ui-vX.Y.Z.zip` and
-   attached to the GitHub Release for static hosting
 
 The Mapbox token is **not** baked into the wheel. At runtime, the server exposes
 `/config.js` which reads `MAPBOX_TOKEN` from its environment (process env, or a

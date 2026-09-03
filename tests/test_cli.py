@@ -164,31 +164,20 @@ def test_ui_api_url_is_cli_only(tmp_path, monkeypatch, no_uvicorn):
     assert "app" not in no_uvicorn
 
 
-def test_serve_no_ui_and_cors_origins(tmp_path, monkeypatch, no_uvicorn):
-    """--no-ui / --cors-origins reach create_app and the preflight report."""
+def test_serve_no_ui(tmp_path, monkeypatch, no_uvicorn):
+    """--no-ui reaches create_app and the preflight report."""
     monkeypatch.chdir(tmp_path)
 
     result = CliRunner().invoke(
-        main,
-        [
-            "start",
-            "backend",
-            "--no-ui",
-            "--cors-origins",
-            "http://laptop:3000, http://laptop:5173/",
-            "--db-path",
-            str(tmp_path / "t.db"),
-        ],
+        main, ["start", "backend", "--no-ui", "--db-path", str(tmp_path / "t.db")]
     )
 
     assert result.exit_code == 0, result.output
     assert "Map UI disabled (--no-ui)" in result.output
-    assert "CORS origins: http://laptop:3000, http://laptop:5173" in result.output
 
     client = TestClient(no_uvicorn["app"])
     assert client.get("/").status_code == 404
-    allowed = client.get("/api", headers={"Origin": "http://laptop:5173"})
-    assert allowed.headers.get("access-control-allow-origin") == "http://laptop:5173"
+    assert client.get("/api").status_code == 200
 
 
 def test_serve_aircraft_db_option_applies_before_preflight(tmp_path, monkeypatch, no_uvicorn):

@@ -9,7 +9,7 @@ from dotenv import find_dotenv, load_dotenv
 
 from adsb import __version__
 from adsb.aircraft_db import aircraft_db_path, set_aircraft_db_path
-from adsb.api import create_app, frontend_is_bundled, parse_cors_origins
+from adsb.api import create_app, frontend_is_bundled
 from adsb.database import Database
 from adsb.decoder import ADSBDecoder
 from adsb.network import start_network_client
@@ -18,7 +18,7 @@ from adsb.ui import create_ui_app
 AIRCRAFT_DB_URL = "https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz"
 
 
-def _echo_preflight(source: str, connect: tuple, serve_ui: bool, cors_origins: list) -> None:
+def _echo_preflight(source: str, connect: tuple, serve_ui: bool) -> None:
     """Report the things that otherwise fail silently at runtime.
 
     Each of these leaves the server looking healthy while the map stays blank or
@@ -51,8 +51,6 @@ def _echo_preflight(source: str, connect: tuple, serve_ui: bool, cors_origins: l
             "No data source - map stays empty; use --source net --connect HOST PORT TYPE",
         ),
     ]
-    if cors_origins:
-        checks.append((True, f"CORS origins: {', '.join(cors_origins)}", ""))
     for ok, good, bad in checks:
         click.echo(f"  [{'ok' if ok else '!!'}] {good if ok else bad}")
 
@@ -138,15 +136,6 @@ def start():
     is_flag=True,
     help="Serve the REST API only; do not serve the bundled map UI at /",
 )
-@click.option(
-    "--cors-origins",
-    metavar="ORIGINS",
-    help=(
-        "Comma-separated browser origins allowed to call /api/* cross-origin, "
-        "e.g. http://laptop:3000 or '*'. Only needed when the UI is hosted elsewhere "
-        "and talks to this API directly (not via `adsb start frontend`, which proxies)."
-    ),
-)
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development")
 @aircraft_db_option
 def backend(
@@ -159,7 +148,6 @@ def backend(
     lat: float,
     lon: float,
     no_ui: bool,
-    cors_origins: str | None,
     reload: bool,
 ):
     """
@@ -289,11 +277,10 @@ def backend(
         click.echo("Network decoder started successfully")
 
     # Create FastAPI app with network client for graceful shutdown
-    origins = parse_cors_origins(cors_origins)
-    app = create_app(database, network_client, serve_ui=not no_ui, cors_origins=origins)
+    app = create_app(database, network_client, serve_ui=not no_ui)
 
     click.echo("Startup checks:")
-    _echo_preflight(source, connect, serve_ui=not no_ui, cors_origins=origins)
+    _echo_preflight(source, connect, serve_ui=not no_ui)
 
     # Start server
     # Note: Uvicorn handles signals and will trigger FastAPI lifespan shutdown

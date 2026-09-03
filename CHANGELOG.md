@@ -24,16 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     reverse-proxies `/api/*` and `/config.js` to the backend, so the browser stays
     same-origin and the backend needs no CORS configuration. A local `MAPBOX_TOKEN`
     overrides the backend's; the backend being down surfaces as a 502/504 JSON error.
-  - `adsb start backend --no-ui` runs API-only; `adsb start backend --cors-origins a,b` (or `*`) allows
-    browsers on other origins to call `/api/*` directly, for statically hosted builds.
+  - `adsb start backend --no-ui` runs API-only.
   - `ADSB_API_URL=http://receiver:8000 bun run dev` (or `just dev-frontend URL`) points
     the Vite dev/preview proxy at a remote backend. New `just dev-backend`, `just
     dev-frontend`, `just frontend` recipes.
-  - `frontend/config.example.js` documents the runtime `config.js` for static hosting;
-    releases attach `adsb-map-ui-vX.Y.Z.zip` containing the built UI plus that template.
 - `adsb start backend` prints startup checks for the conditions that otherwise fail silently:
-  frontend bundled (or `--no-ui`), aircraft database present, `MAPBOX_TOKEN` set, data
-  source configured, and any CORS origins in effect.
+  frontend bundled (or `--no-ui`), aircraft database present, `MAPBOX_TOKEN` set, and data
+  source configured.
 - `--aircraft-db PATH` on `adsb start backend`, `adsb download` and `adsb decode` overrides the
   aircraft database location.
 - `just bootstrap` installs bun; `just build` now fails with an actionable message when
@@ -52,13 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mechanism.
 - `.env` is for secrets only (`MAPBOX_TOKEN`); every other setting is a CLI argument.
   Configuration is never read from `ADSB_*` environment variables.
-- CORS: previously enabled with fixed localhost origins only when the frontend was not
-  bundled. Now the dev-server origins are allowed whenever this process is not serving
-  the UI (not bundled or `--no-ui`), operator-supplied `--cors-origins` are always
-  honoured, and only `GET` is allowed.
-- `adsb.api.create_app` gains keyword-only `serve_ui` and `cors_origins`;
-  `frontend_is_bundled` accepts an optional directory; new `mount_spa` and
-  `parse_cors_origins` helpers.
+- CORS for the Vite dev-server origins is now enabled whenever this process is not
+  serving the UI (not bundled or `--no-ui`), and only `GET` is allowed.
+- `adsb.api.create_app` gains keyword-only `serve_ui`; `frontend_is_bundled` accepts an
+  optional directory; new `mount_spa` helper.
 - `httpx` is now a runtime dependency (used by the `adsb start frontend` proxy).
 - **Breaking:** `AircraftDatabase` no longer auto-extracts a sibling `aircraft.csv.gz`;
   `adsb download` is the one supported way to obtain the database.

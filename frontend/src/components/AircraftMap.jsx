@@ -8,9 +8,15 @@ import {
   MAP_STYLE_LIGHT,
   MAP_STYLE_DARK,
   TRACK_COLOR,
+  TRACK_COLOR_DARK,
   TRACK_WIDTH,
   TRACK_OPACITY,
+  SELECTED_TRACK_COLOR,
+  SELECTED_TRACK_COLOR_DARK,
+  SELECTED_TRACK_WIDTH,
+  AIRCRAFT_GLYPH,
 } from '../constants'
+import AircraftTags from './AircraftTags'
 import './AircraftMap.css'
 
 /**
@@ -21,6 +27,7 @@ import './AircraftMap.css'
  * @param {string} props.mapboxToken - MapBox API token
  * @param {Object} props.tracks - Map of icao24 to array of position points
  * @param {boolean} props.showTracks - Whether to display tracks
+ * @param {boolean} props.showLabels - Whether to draw a callsign tag beside each aircraft
  * @param {string} props.theme - Current theme ('light' or 'dark')
  * @returns {JSX.Element} The map component
  */
@@ -29,6 +36,7 @@ function AircraftMap({
   mapboxToken,
   tracks = {},
   showTracks = false,
+  showLabels = false,
   maxAgeMinutes = 5,
   onTrackingAircraft,
   theme = 'light',
@@ -38,6 +46,7 @@ function AircraftMap({
   const [selectedAircraftTrack, setSelectedAircraftTrack] = useState(null)
   const [loadingTrack, setLoadingTrack] = useState(false)
   const [viewport, setViewport] = useState(DEFAULT_MAP_CENTER)
+  const [mapInstance, setMapInstance] = useState(null)
 
   // Track if we've done initial centering
   const [hasInitialized, setHasInitialized] = useState(false)
@@ -66,13 +75,13 @@ function AircraftMap({
   /**
    * Get the rotation angle for the aircraft icon based on track
    * Aircraft track is 0° for north, 90° for east, etc.
-   * The airplane emoji points right (east) by default, so subtract 90° to align correctly
+   * The marker glyph points up (north) by default, so the track maps directly to rotation
    *
    * @param {number} track - Aircraft track in degrees
    * @returns {string} CSS transform string
    */
   const getAircraftRotation = track => {
-    return track !== null && track !== undefined ? `rotate(${track - 90}deg)` : 'rotate(-90deg)'
+    return track !== null && track !== undefined ? `rotate(${track}deg)` : 'rotate(0deg)'
   }
 
   /**
@@ -106,29 +115,27 @@ function AircraftMap({
   }
 
   /**
-   * Calculate color based on aircraft age
-   * Fades from full red (#e74c3c) to light red (#ffb3a8) based on maxAgeMinutes
+   * How far a marker has aged toward maxAgeMinutes, 0 (just heard) to 1 (about to expire).
+   * The stylesheet blends the marker's ink toward gray by this amount.
    *
    * @param {number} lastseen - Unix timestamp of last seen
-   * @returns {string} CSS color string
+   * @returns {number} Age ratio between 0 and 1
    */
-  const getAircraftColor = lastseen => {
-    if (!lastseen) return '#e74c3c' // Full red if no timestamp
+  const getAircraftAge = lastseen => {
+    if (!lastseen) return 0
+    const ageInMinutes = (Math.floor(Date.now() / 1000) - lastseen) / 60
+    return Math.min(ageInMinutes / maxAgeMinutes, 1)
+  }
 
-    const currentTime = Math.floor(Date.now() / 1000)
-    const ageInSeconds = currentTime - lastseen
-    const ageInMinutes = ageInSeconds / 60
-
-    // Linear interpolation from full red to light red
-    // 0 minutes = #e74c3c (231, 76, 60)
-    // maxAgeMinutes = #ffb3a8 (255, 179, 168)
-    const ratio = Math.min(ageInMinutes / maxAgeMinutes, 1)
-
-    const r = Math.round(231 + (255 - 231) * ratio)
-    const g = Math.round(76 + (179 - 76) * ratio)
-    const b = Math.round(60 + (168 - 60) * ratio)
-
-    return `rgb(${r}, ${g}, ${b})`
+  /**
+   * Format vertical rate magnitude with thousands separator; direction is shown as a glyph
+   *
+   * @param {number} rate - Vertical rate in ft/min
+   * @returns {string} Formatted rate string
+   */
+  const formatVerticalRate = rate => {
+    if (rate === null || rate === undefined) return 'N/A'
+    return Math.abs(rate).toLocaleString()
   }
 
   // Fetch detailed track when an aircraft is selected
@@ -158,10 +165,14 @@ function AircraftMap({
   }, [selectedAircraft, onTrackingAircraft])
 
   // Filter aircraft with valid positions
-  const validAircraft = aircraft.filter(a => a.latitude && a.longitude)
+  const validAircraft = useMemo(() => aircraft.filter(a => a.latitude && a.longitude), [aircraft])
 
-  // Select map style based on theme
-  const mapStyle = theme === 'dark' ? MAP_STYLE_DARK : MAP_STYLE_LIGHT
+  // Select map style and track colors based on theme
+  const isDark = theme === 'dark'
+  const mapStyle = isDark ? MAP_STYLE_DARK : MAP_STYLE_LIGHT
+  const trackColor = isDark ? TRACK_COLOR_DARK : TRACK_COLOR
+  const selectedTrackColor = isDark ? SELECTED_TRACK_COLOR_DARK : SELECTED_TRACK_COLOR
+  const trackCasingColor = isDark ? '#000000' : '#ffffff'
 
   /**
    * Convert tracks data to GeoJSON format for MapBox
@@ -281,6 +292,7 @@ function AircraftMap({
         mapboxAccessToken={mapboxToken}
         style={{ width: '100%', height: '100%' }}
         mapStyle={mapStyle}
+        onLoad={e => setMapInstance(e.target)}
       >
         {/* Render all aircraft tracks (only when not showing selected aircraft track) */}
         {showTracks && !selectedAircraftTrack && (
@@ -289,7 +301,7 @@ function AircraftMap({
               id="tracks-layer"
               type="line"
               paint={{
-                'line-color': TRACK_COLOR,
+                'line-color': trackColor,
                 'line-width': TRACK_WIDTH,
                 'line-opacity': TRACK_OPACITY,
               }}
@@ -305,14 +317,35 @@ function AircraftMap({
               id="selected-aircraft-track-line"
               type="geojson"
               data={selectedTrackLineGeoJSON}
+              lineMetrics
             >
+              <Layer
+                id="selected-track-casing"
+                type="line"
+                layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+                paint={{
+                  'line-color': trackCasingColor,
+                  'line-width': SELECTED_TRACK_WIDTH + 2,
+                  'line-opacity': 0.5,
+                }}
+              />
               <Layer
                 id="selected-track-layer"
                 type="line"
+                layout={{ 'line-cap': 'round', 'line-join': 'round' }}
                 paint={{
-                  'line-color': '#f39c12', // Orange color for selected track
-                  'line-width': 2,
-                  'line-opacity': 0.7,
+                  'line-color': selectedTrackColor,
+                  'line-width': SELECTED_TRACK_WIDTH,
+                  // Fade into the past so the line also reads as a direction
+                  'line-gradient': [
+                    'interpolate',
+                    ['linear'],
+                    ['line-progress'],
+                    0,
+                    isDark ? 'rgba(59, 156, 255, 0.2)' : 'rgba(0, 113, 227, 0.2)',
+                    1,
+                    selectedTrackColor,
+                  ],
                 }}
               />
             </Source>
@@ -326,19 +359,12 @@ function AircraftMap({
                 id="selected-track-points"
                 type="circle"
                 paint={{
-                  'circle-radius': [
-                    'interpolate',
-                    ['linear'],
-                    ['zoom'],
-                    5,
-                    2, // At zoom 5: 2px
-                    10,
-                    2, // At zoom 10: 3px
-                    15,
-                    2, // At zoom 15: 4px
-                  ],
-                  'circle-color': '#f39c12',
-                  'circle-opacity': 0.95,
+                  // Individual reports only surface once zoomed in enough to separate them
+                  'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 0, 11, 2, 15, 3],
+                  'circle-color': trackCasingColor,
+                  'circle-stroke-color': selectedTrackColor,
+                  'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 9, 0, 11, 1.5],
+                  'circle-opacity': 0.9,
                 }}
               />
             </Source>
@@ -351,26 +377,25 @@ function AircraftMap({
             longitude={ac.longitude}
             latitude={ac.latitude}
             anchor="center"
+            style={{ zIndex: selectedAircraft?.icao24 === ac.icao24 ? 2 : 1 }}
             onClick={e => {
               e.originalEvent.stopPropagation()
               setSelectedAircraft(ac)
             }}
           >
             <div
-              className="aircraft-marker"
+              className={`aircraft-marker ${selectedAircraft?.icao24 === ac.icao24 ? 'selected' : ''}`}
               style={{
                 transform: getAircraftRotation(ac.track),
-                color: getAircraftColor(ac.lastseen),
+                '--age': getAircraftAge(ac.lastseen),
               }}
-              title={
-                [
-                  cleanCallsign(ac.callsign) || ac.icao24,
-                  ac.registration ? `(${ac.registration})` : null,
-                  ac.typecode ? `- ${ac.typecode}` : null,
-                ]
-                  .filter(Boolean)
-                  .join(' ')
-              }
+              title={[
+                cleanCallsign(ac.callsign) || ac.icao24,
+                ac.registration ? `(${ac.registration})` : null,
+                ac.typecode ? `- ${ac.typecode}` : null,
+              ]
+                .filter(Boolean)
+                .join(' ')}
               role="button"
               tabIndex={0}
               aria-label={`Aircraft ${ac.callsign || ac.icao24} at ${formatAltitude(ac.altitude)} feet`}
@@ -381,72 +406,113 @@ function AircraftMap({
                 }
               }}
             >
-              ✈
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d={AIRCRAFT_GLYPH} />
+              </svg>
             </div>
           </Marker>
         ))}
       </Map>
 
-      {/* Sidebar for aircraft details */}
+      {/* Callsign tags with leader lines, laid out in screen space beneath the plane markers */}
+      <AircraftTags
+        map={mapInstance}
+        aircraft={validAircraft}
+        selectedId={selectedAircraft?.icao24 ?? null}
+        maxAgeMinutes={maxAgeMinutes}
+        visible={showLabels}
+      />
+
+      {/* Detail card for the selected aircraft */}
       <div className={`aircraft-sidebar ${selectedAircraft ? 'active' : ''}`}>
         {selectedAircraft ? (
           <>
             <div className="sidebar-header">
               <h3>
-                {cleanCallsign(selectedAircraft.callsign)}
-                {loadingTrack && <span className="loading-indicator"> Loading...</span>}
+                <span>{cleanCallsign(selectedAircraft.callsign)}</span>
+                <span className="sidebar-subtitle">
+                  {selectedAircraft.registration && <b>{selectedAircraft.registration}</b>}
+                  {selectedAircraft.type_description && (
+                    <span>{selectedAircraft.type_description}</span>
+                  )}
+                  {!selectedAircraft.type_description && selectedAircraft.typecode && (
+                    <span>{selectedAircraft.typecode}</span>
+                  )}
+                </span>
+                {loadingTrack && <span className="loading-indicator">Loading track…</span>}
               </h3>
               <button
                 className="close-button"
                 onClick={() => setSelectedAircraft(null)}
                 aria-label="Close aircraft details"
               >
-                ×
+                <svg
+                  viewBox="0 0 12 12"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  aria-hidden="true"
+                >
+                  <path d="M2 2l8 8M10 2l-8 8" />
+                </svg>
               </button>
             </div>
             <div className="sidebar-content">
-              <div className="info-group">
-                <div className="info-section-title">Aircraft Details</div>
+              <div className="flight-strip" role="group" aria-label="Flight data">
+                <div className="stat">
+                  <div className="stat-value">
+                    {formatAltitude(selectedAircraft.altitude)}
+                    <small>ft</small>
+                  </div>
+                  <span className="stat-label">Altitude</span>
+                </div>
+                <div className="stat">
+                  <div className="stat-value">
+                    {formatSpeed(selectedAircraft.groundspeed)}
+                    <small>kts</small>
+                  </div>
+                  <span className="stat-label">Speed</span>
+                </div>
+                <div className="stat">
+                  <div className="stat-value">
+                    {selectedAircraft.vertical_rate ? (
+                      <svg
+                        className="dir"
+                        viewBox="0 0 10 10"
+                        aria-label={selectedAircraft.vertical_rate > 0 ? 'Climbing' : 'Descending'}
+                        style={{
+                          transform: selectedAircraft.vertical_rate > 0 ? 'none' : 'rotate(180deg)',
+                        }}
+                      >
+                        <path d="M5 1l4.5 6h-9z" />
+                      </svg>
+                    ) : null}
+                    {formatVerticalRate(selectedAircraft.vertical_rate)}
+                    <small>ft/min</small>
+                  </div>
+                  <span className="stat-label">Vertical rate</span>
+                </div>
+              </div>
 
+              <div className="info-group">
+                <div className="info-section-title">Aircraft</div>
                 <div className="info-row">
-                  <span className="label">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/>
-                    </svg>
-                    ICAO24
-                  </span>
+                  <span className="label">ICAO 24</span>
                   <span className="value">{selectedAircraft.icao24}</span>
                 </div>
-
                 <div className="info-row">
-                  <span className="label">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                    </svg>
-                    Registration
-                  </span>
+                  <span className="label">Registration</span>
                   <span className="value">{selectedAircraft.registration || 'N/A'}</span>
                 </div>
-
                 {selectedAircraft.type_description && (
                   <div className="info-row">
-                    <span className="label">
-                      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
-                      </svg>
-                      Aircraft
-                    </span>
+                    <span className="label">Aircraft</span>
                     <span className="value">{selectedAircraft.type_description}</span>
                   </div>
                 )}
-
                 <div className="info-row">
-                  <span className="label">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/>
-                    </svg>
-                    Type
-                  </span>
+                  <span className="label">Type</span>
                   <span className="value">{selectedAircraft.typecode || 'N/A'}</span>
                 </div>
               </div>
@@ -454,75 +520,37 @@ function AircraftMap({
               <div className="divider"></div>
 
               <div className="info-group">
-                <div className="info-section-title">Flight Data</div>
-
+                <div className="info-section-title">Flight</div>
                 <div className="info-row">
-                  <span className="label">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 11l5-5m0 0l5 5m-5-5v12"/>
-                    </svg>
-                    Altitude
+                  <span className="label">Track</span>
+                  <span className="value">
+                    {selectedAircraft.track !== null && selectedAircraft.track !== undefined && (
+                      <svg
+                        className="heading"
+                        viewBox="0 0 12 12"
+                        aria-hidden="true"
+                        style={{ transform: `rotate(${selectedAircraft.track}deg)` }}
+                      >
+                        <path d="M6 1.5v9M2.5 5L6 1.5 9.5 5" />
+                      </svg>
+                    )}
+                    {selectedAircraft.track?.toFixed(1) || 'N/A'}°
                   </span>
-                  <span className="value highlight">{formatAltitude(selectedAircraft.altitude)} ft</span>
                 </div>
-
                 <div className="info-row">
-                  <span className="label">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                    </svg>
-                    Ground Speed
-                  </span>
-                  <span className="value highlight">{formatSpeed(selectedAircraft.groundspeed)} kts</span>
-                </div>
-
-                <div className="info-row">
-                  <span className="label">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/>
-                    </svg>
-                    Vertical Rate
-                  </span>
-                  <span className="value">{selectedAircraft.vertical_rate || 'N/A'} ft/min</span>
-                </div>
-
-                <div className="info-row">
-                  <span className="label">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/>
-                    </svg>
-                    Track
-                  </span>
-                  <span className="value">{selectedAircraft.track?.toFixed(1) || 'N/A'}°</span>
-                </div>
-
-                <div className="info-row">
-                  <span className="label">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-                    </svg>
-                    Squawk
-                  </span>
+                  <span className="label">Squawk</span>
                   <span className="value">{selectedAircraft.squawk || 'N/A'}</span>
                 </div>
-
-                {selectedAircraftTrack && (
-                  <div className="info-row">
-                    <span className="label">
-                      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-                      </svg>
-                      Track Points
-                    </span>
-                    <span className="value">{selectedAircraftTrack.length}</span>
-                  </div>
-                )}
               </div>
+
+              {selectedAircraftTrack && (
+                <p className="track-footnote">{selectedAircraftTrack.length} track points</p>
+              )}
             </div>
           </>
         ) : (
           <div className="sidebar-placeholder">
-            <p>Click an aircraft to view details</p>
+            <p>Select an aircraft to view details</p>
           </div>
         )}
       </div>
@@ -551,6 +579,7 @@ AircraftMap.propTypes = {
   mapboxToken: PropTypes.string.isRequired,
   tracks: PropTypes.objectOf(PropTypes.arrayOf(PropTypes.arrayOf(PropTypes.number))),
   showTracks: PropTypes.bool,
+  showLabels: PropTypes.bool,
   maxAgeMinutes: PropTypes.number,
   onTrackingAircraft: PropTypes.func,
   theme: PropTypes.oneOf(['light', 'dark']),
@@ -559,6 +588,7 @@ AircraftMap.propTypes = {
 AircraftMap.defaultProps = {
   tracks: {},
   showTracks: false,
+  showLabels: false,
   maxAgeMinutes: 5,
   onTrackingAircraft: null,
   theme: 'light',

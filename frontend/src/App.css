@@ -135,6 +135,13 @@ main {
   font-style: italic;
 }
 
+.demo-badge {
+  color: var(--text-error);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 /* Screen reader only text */
 .sr-only {
   position: absolute;

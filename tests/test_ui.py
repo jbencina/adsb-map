@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from adsb.api import create_app
 from adsb.models import AircraftPosition
-from adsb.ui import create_ui_app, normalize_api_url
+from adsb.ui import config_js_body, create_ui_app, normalize_api_url
 
 
 @pytest.fixture
@@ -129,6 +129,14 @@ def test_ui_config_js_without_token(ui_client, monkeypatch):
     response = ui_client.get("/config.js")
     assert response.status_code == 200
     assert '"mapboxToken": ""' in response.text
+
+
+def test_ui_config_js_demo_flag(static_dir):
+    """`--demo` reaches the SPA only through config.js; the server itself is unchanged."""
+    app = create_ui_app("http://receiver.test:8000", static_dir=static_dir, demo=True)
+    with TestClient(app) as client:
+        assert '"demo": true' in client.get("/config.js").text
+    assert '"demo": false' in config_js_body("")
 
 
 def test_ui_reports_unreachable_backend_as_502(static_dir):

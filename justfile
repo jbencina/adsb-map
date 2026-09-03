@@ -17,6 +17,10 @@ dev *ARGS:
 dev-frontend API_URL="http://localhost:8000":
     cd frontend && ADSB_API_URL={{API_URL}} bun run dev
 
+# Vite dev server with simulated aircraft; no backend needed.
+dev-demo:
+    cd frontend && bun run dev:demo
+
 # Run the decoder + API.
 # Example: just backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 backend *ARGS:
@@ -26,6 +30,10 @@ backend *ARGS:
 # Example: just frontend http://receiver.local:8000 --host 0.0.0.0
 frontend API_URL="http://127.0.0.1:8000" *ARGS:
     uv run adsb start frontend --api-url {{API_URL}} {{ARGS}}
+
+# Bundled map UI with simulated aircraft; no backend needed (run `just build` first).
+demo *ARGS:
+    uv run adsb start frontend --demo {{ARGS}}
 
 # Install the frontend toolchain. Run once on a fresh checkout.
 bootstrap:

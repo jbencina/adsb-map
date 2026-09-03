@@ -86,18 +86,21 @@ def normalize_api_url(api_url: str) -> str:
     return str(url).rstrip("/")
 
 
-def config_js_body(mapbox_token: str) -> str:
+def config_js_body(mapbox_token: str, demo: bool = False) -> str:
     """JavaScript that hands runtime config to the SPA as ``window.APP_CONFIG``.
 
     ``apiUrl`` is always empty: the SPA calls ``/api/*`` same-origin and this
     server forwards it, so one bundle works for any backend without a rebuild.
+    With ``demo`` the SPA answers those calls from its built-in simulator instead.
     """
-    return f"window.APP_CONFIG = {json.dumps({'mapboxToken': mapbox_token, 'apiUrl': ''})};"
+    config = {"mapboxToken": mapbox_token, "apiUrl": "", "demo": demo}
+    return f"window.APP_CONFIG = {json.dumps(config)};"
 
 
 def create_ui_app(
     api_url: str = DEFAULT_API_URL,
     *,
+    demo: bool = False,
     static_dir: Path | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
@@ -108,6 +111,8 @@ def create_ui_app(
     ----------
     api_url : str, optional
         Base URL of the ``adsb start backend`` instance to proxy to
+    demo : bool, optional
+        Tell the SPA to simulate traffic in the browser instead of calling the API
     static_dir : Path, optional
         Directory holding the built frontend; defaults to the bundled one
     transport : httpx.AsyncBaseTransport, optional
@@ -151,6 +156,7 @@ def create_ui_app(
         lifespan=lifespan,
     )
     app.state.api_url = api_url
+    app.state.demo = demo
 
     async def proxy(request: Request, path: str) -> Response:
         client: httpx.AsyncClient = request.app.state.client
@@ -185,7 +191,7 @@ def create_ui_app(
     @app.get("/config.js", include_in_schema=False)
     async def config_js():
         return Response(
-            content=config_js_body(os.environ.get("MAPBOX_TOKEN", "")),
+            content=config_js_body(os.environ.get("MAPBOX_TOKEN", ""), demo=demo),
             media_type="application/javascript",
         )
 

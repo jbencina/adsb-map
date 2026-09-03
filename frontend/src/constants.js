@@ -10,6 +10,8 @@
 const runtime = (typeof window !== 'undefined' && window.APP_CONFIG) || {}
 export const API_URL = (runtime.apiUrl || import.meta.env.VITE_API_URL || '').replace(/\/+$/, '')
 export const MAPBOX_TOKEN = runtime.mapboxToken || import.meta.env.VITE_MAPBOX_TOKEN || ''
+// Demo mode answers API calls from an in-browser simulator; no backend is contacted.
+export const DEMO_MODE = Boolean(runtime.demo)
 
 // Map Configuration
 export const DEFAULT_MAP_CENTER = {

@@ -33,6 +33,8 @@ dependencies = [
     "pydantic>=2.9.0",
     "click>=8.1.0",
     "python-dotenv>=1.0.0",
+    # Resolves the per-user data dir holding the downloaded aircraft database.
+    "platformdirs>=4.0.0",
     # Pin to v2: v3 introduces a breaking API change (see migration guide upstream)
     # that requires code changes in adsb/decoder.py. Bump separately when ready.
     "pyModeS>=2.21.0,<3",

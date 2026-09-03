@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
@@ -59,7 +59,36 @@ def get_session():
         yield session
 
 
-def _frontend_is_bundled() -> bool:
+#: Shown at `/` when the SPA was never built. Without this the request fell through
+#: to a bare FastAPI 404, which gave no hint that a frontend build was the missing step.
+FRONTEND_MISSING_HELP = (
+    "Frontend not bundled (adsb/static/ is empty). "
+    "Run `just build` to bundle it, `just dev` for hot-reload dev mode, "
+    "or install the published wheel with `pip install adsb-map`."
+)
+
+FRONTEND_MISSING_HTML = """<!doctype html>
+<title>ADS-B - frontend not built</title>
+<style>
+  body { font: 15px/1.6 system-ui, sans-serif; max-width: 34rem; margin: 4rem auto; padding: 0 1rem; }
+  code { background: #8881; padding: .15em .4em; border-radius: 3px; }
+  li { margin: .4em 0; }
+</style>
+<h1>Frontend not built</h1>
+<p>The API is running, but the map UI was never bundled into
+<code>adsb/static/</code>, so there is nothing to serve here.</p>
+<ul>
+  <li><code>just build</code> - build the SPA and serve it from this port</li>
+  <li><code>just dev</code> - hot-reload dev server on port 3000</li>
+  <li><code>pip install adsb-map</code> - the published wheel ships it prebuilt</li>
+</ul>
+<p><code>just build</code> needs <a href="https://bun.sh">bun</a>; run
+<code>just bootstrap</code> first if it is missing.</p>
+<p>The REST API is unaffected: <a href="/api">/api</a></p>
+"""
+
+
+def frontend_is_bundled() -> bool:
     """Return True when the built frontend has been staged into the package."""
     return STATIC_DIR.is_dir() and (STATIC_DIR / "index.html").is_file()
 
@@ -102,7 +131,7 @@ def create_app(database: Database, network_client=None) -> FastAPI:
 
     # CORS is only required when the frontend runs as a separate dev server.
     # In a bundled wheel the frontend is served same-origin from this app.
-    if not _frontend_is_bundled():
+    if not frontend_is_bundled():
         app.add_middleware(
             CORSMiddleware,
             allow_origins=[
@@ -305,7 +334,7 @@ def create_app(database: Database, network_client=None) -> FastAPI:
             media_type="application/javascript",
         )
 
-    if _frontend_is_bundled():
+    if frontend_is_bundled():
         app.mount(
             "/assets",
             StaticFiles(directory=STATIC_DIR / "assets"),
@@ -320,9 +349,11 @@ def create_app(database: Database, network_client=None) -> FastAPI:
                 raise HTTPException(status_code=404)
             return FileResponse(STATIC_DIR / "index.html")
     else:
-        logging.getLogger("adsb").info(
-            "Frontend not bundled (adsb/static/ missing). "
-            "Run `just build` to bundle, or `just dev` for hot-reload dev mode."
-        )
+        logging.getLogger("adsb").warning(FRONTEND_MISSING_HELP)
+
+        # Only `/` is claimed, so unmatched API paths keep returning an honest 404.
+        @app.get("/", include_in_schema=False)
+        async def frontend_missing():
+            return HTMLResponse(FRONTEND_MISSING_HTML, status_code=503)
 
     return app

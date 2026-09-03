@@ -239,7 +239,7 @@ def test_cors_origins_in_dev_mode(test_db, monkeypatch):
     """CORS middleware is registered when frontend is not bundled (dev mode)."""
     import adsb.api
 
-    monkeypatch.setattr(adsb.api, "_frontend_is_bundled", lambda: False)
+    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: False)
     app = create_app(test_db)
     client = TestClient(app)
 
@@ -257,7 +257,7 @@ def test_spa_fallback_when_bundled(test_db, monkeypatch, tmp_path):
     (static_dir / "index.html").write_text("<html>spa</html>")
 
     monkeypatch.setattr(adsb.api, "STATIC_DIR", static_dir)
-    monkeypatch.setattr(adsb.api, "_frontend_is_bundled", lambda: True)
+    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: True)
 
     app = create_app(test_db)
     client = TestClient(app)
@@ -275,7 +275,7 @@ def test_config_js_available_in_dev_mode(test_db, monkeypatch):
     import adsb.api
 
     monkeypatch.setenv("MAPBOX_TOKEN", "pk.test_token_value")
-    monkeypatch.setattr(adsb.api, "_frontend_is_bundled", lambda: False)
+    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: False)
 
     app = create_app(test_db)
     client = TestClient(app)
@@ -297,7 +297,7 @@ def test_config_js_available_in_bundled_mode(test_db, monkeypatch, tmp_path):
 
     monkeypatch.setenv("MAPBOX_TOKEN", "pk.bundled_token")
     monkeypatch.setattr(adsb.api, "STATIC_DIR", static_dir)
-    monkeypatch.setattr(adsb.api, "_frontend_is_bundled", lambda: True)
+    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: True)
 
     app = create_app(test_db)
     client = TestClient(app)
@@ -334,3 +334,21 @@ def test_api_endpoints_exist(test_db, endpoint, expected_status):
 
     response = client.get(endpoint)
     assert response.status_code == expected_status
+
+
+def test_frontend_missing_page_when_not_bundled(test_db, monkeypatch):
+    """An unbuilt frontend serves an explanatory 503 at / instead of a bare 404."""
+    import adsb.api
+
+    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: False)
+    app = create_app(test_db)
+    client = TestClient(app)
+
+    response = client.get("/")
+    assert response.status_code == 503
+    assert response.headers["content-type"].startswith("text/html")
+    assert "just build" in response.text
+
+    # The API must stay honest rather than being shadowed by the help page.
+    assert client.get("/api").status_code == 200
+    assert client.get("/api/nonexistent").status_code == 404

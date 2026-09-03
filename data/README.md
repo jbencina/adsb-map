@@ -22,9 +22,12 @@ The CSV file contains the following fields (semicolon-delimited):
 The aircraft database is **not included** in the repository. Download it using the CLI command:
 
 ```bash
-# From the project root directory
 uv run adsb download
 ```
+
+It is written to a per-user data directory (`~/.local/share/adsb-map/aircraft.csv` on
+Linux), **not** to this directory, so it is found regardless of where `adsb serve` runs
+from. Override the location with the `ADSB_AIRCRAFT_DB` environment variable.
 
 This will:
 1. Download the compressed database (~9MB) from tar1090-db

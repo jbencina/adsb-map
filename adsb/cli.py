@@ -88,11 +88,16 @@ def main():
     # for secrets only (MAPBOX_TOKEN); everything else is a CLI argument.
     # `usecwd=True` is required: the default starts searching from the importing
     # module's location, which under pytest/CliRunner doesn't match the user's CWD.
-    # `override=False` so explicit `MAPBOX_TOKEN=… adsb serve` still beats a stale .env.
+    # `override=False` so explicit `MAPBOX_TOKEN=… adsb start backend` still beats a stale .env.
     load_dotenv(find_dotenv(usecwd=True), override=False)
 
 
-@main.command()
+@main.group()
+def start():
+    """Start a service: `backend` (decoder + API) or `frontend` (map UI client)."""
+
+
+@start.command()
 @click.option("--host", default="0.0.0.0", help="Host to bind the server to", show_default=True)
 @click.option("--port", default=8000, help="Port to bind the server to", show_default=True)
 @click.option(
@@ -139,12 +144,12 @@ def main():
     help=(
         "Comma-separated browser origins allowed to call /api/* cross-origin, "
         "e.g. http://laptop:3000 or '*'. Only needed when the UI is hosted elsewhere "
-        "and talks to this API directly (not via `adsb ui`, which proxies)."
+        "and talks to this API directly (not via `adsb start frontend`, which proxies)."
     ),
 )
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development")
 @aircraft_db_option
-def serve(
+def backend(
     host: str,
     port: int,
     db_path: str,
@@ -158,21 +163,21 @@ def serve(
     reload: bool,
 ):
     """
-    Start the ADS-B API server.
+    Start the decoder and REST API (plus the bundled map UI unless --no-ui).
 
     Examples:
 
-        # Start server with default settings
-        adsb serve
+        # Start with default settings
+        adsb start backend
 
-        # Start server with custom database path
-        adsb serve --db-path /path/to/adsb.db
+        # Custom database path
+        adsb start backend --db-path /path/to/adsb.db
 
-        # Start server with network data source
-        adsb serve --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+        # With a network data source
+        adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 
-        # API only; run the map elsewhere with `adsb ui --api-url http://this-host:8000`
-        adsb serve --no-ui --source net --connect localhost 30005 beast
+        # API only; run the map elsewhere with `adsb start frontend --api-url http://this-host:8000`
+        adsb start backend --no-ui --source net --connect localhost 30005 beast
     """
     # Suppress deprecation warnings from dependencies
     import warnings
@@ -296,12 +301,12 @@ def serve(
     uvicorn.run(app, host=host, port=port, reload=reload, log_config=log_config)
 
 
-@main.command()
+@start.command()
 @click.option(
     "--api-url",
     required=True,
     metavar="URL",
-    help="Base URL of the `adsb serve` backend, e.g. http://receiver.local:8000",
+    help="Base URL of the `adsb start backend` host, e.g. http://receiver.local:8000",
 )
 @click.option(
     "--host",
@@ -310,18 +315,18 @@ def serve(
     show_default=True,
 )
 @click.option("--port", default=3000, help="Port to bind to", show_default=True)
-def ui(api_url: str, host: str, port: int):
+def frontend(api_url: str, host: str, port: int):
     """
-    Serve the map UI as a client of a remote ADS-B API.
+    Start the map UI as a client of a remote backend.
 
     Runs the bundled map on this machine and proxies /api/* to the backend
-    given by --api-url, so the receiver host only needs `adsb serve` and no
-    CORS configuration. The Mapbox token comes from the backend unless
+    given by --api-url, so the receiver host only needs `adsb start backend`
+    and no CORS configuration. The Mapbox token comes from the backend unless
     MAPBOX_TOKEN is set here.
 
     Example:
 
-        adsb ui --api-url http://receiver.local:8000
+        adsb start frontend --api-url http://receiver.local:8000
     """
     import warnings
 
@@ -489,8 +494,8 @@ def download(force: bool):
     aircraft registration, type code, and descriptions.
 
     Stored in a per-user data directory so it is found no matter which
-    directory `adsb serve` runs from. Override with --aircraft-db (pass the
-    same path to `adsb serve`).
+    directory `adsb start backend` runs from. Override with --aircraft-db (pass the
+    same path to `adsb start backend`).
 
     Example:
 

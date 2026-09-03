@@ -45,7 +45,7 @@ jobs:
           cp -r frontend/dist/. adsb/static/
 
       # Standalone UI bundle for static hosting (nginx, S3, GitHub Pages) against a
-      # remote `adsb serve --cors-origins ...`. Ships config.example.js alongside;
+      # remote `adsb start backend --cors-origins ...`. Ships config.example.js alongside;
       # deployers copy it to config.js and fill in apiUrl / mapboxToken.
       - name: Package standalone UI
         run: |

@@ -108,12 +108,12 @@ def no_uvicorn(monkeypatch):
 
 
 def test_ui_requires_built_frontend(tmp_path, monkeypatch, no_uvicorn):
-    """`adsb ui` on a source checkout without `just build` fails with guidance, not a 503."""
+    """`adsb start frontend` on a source checkout without `just build` fails with guidance, not a 503."""
     import adsb.api
 
     monkeypatch.setattr(adsb.api, "STATIC_DIR", tmp_path / "empty")
 
-    result = CliRunner().invoke(main, ["ui", "--api-url", "http://receiver:8000"])
+    result = CliRunner().invoke(main, ["start", "frontend", "--api-url", "http://receiver:8000"])
 
     assert result.exit_code != 0
     assert "Frontend not bundled" in result.output
@@ -127,7 +127,7 @@ def test_ui_rejects_url_without_scheme(tmp_path, monkeypatch, no_uvicorn):
     (static_dir / "index.html").write_text("<html></html>")
     monkeypatch.setattr(adsb.api, "STATIC_DIR", static_dir)
 
-    result = CliRunner().invoke(main, ["ui", "--api-url", "receiver:8000"])
+    result = CliRunner().invoke(main, ["start", "frontend", "--api-url", "receiver:8000"])
 
     assert result.exit_code != 0
     assert "http://host:port" in result.output
@@ -144,7 +144,7 @@ def test_ui_launches_proxy_app(tmp_path, monkeypatch, no_uvicorn):
     monkeypatch.delenv("MAPBOX_TOKEN", raising=False)
 
     result = CliRunner().invoke(
-        main, ["ui", "--api-url", "http://receiver.local:8000/", "--port", "3456"]
+        main, ["start", "frontend", "--api-url", "http://receiver.local:8000/", "--port", "3456"]
     )
 
     assert result.exit_code == 0, result.output
@@ -157,7 +157,7 @@ def test_ui_api_url_is_cli_only(tmp_path, monkeypatch, no_uvicorn):
     """No env-var fallback: the backend URL is a CLI argument, not .env content."""
     monkeypatch.setenv("ADSB_API_URL", "http://receiver.local:8000")
 
-    result = CliRunner().invoke(main, ["ui"])
+    result = CliRunner().invoke(main, ["start", "frontend"])
 
     assert result.exit_code != 0
     assert "--api-url" in result.output
@@ -171,7 +171,8 @@ def test_serve_no_ui_and_cors_origins(tmp_path, monkeypatch, no_uvicorn):
     result = CliRunner().invoke(
         main,
         [
-            "serve",
+            "start",
+            "backend",
             "--no-ui",
             "--cors-origins",
             "http://laptop:3000, http://laptop:5173/",
@@ -197,7 +198,7 @@ def test_serve_aircraft_db_option_applies_before_preflight(tmp_path, monkeypatch
 
     result = CliRunner().invoke(
         main,
-        ["serve", "--aircraft-db", str(target), "--db-path", str(tmp_path / "t.db")],
+        ["start", "backend", "--aircraft-db", str(target), "--db-path", str(tmp_path / "t.db")],
     )
 
     assert result.exit_code == 0, result.output

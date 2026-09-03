@@ -2,21 +2,21 @@ default:
     @just --list
 
 # Run backend + Vite dev server concurrently with hot reload.
-# Pass extra args straight through to `adsb serve`.
+# Pass extra args straight through to `adsb start backend`.
 # Example: just dev --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 dev *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     trap 'kill 0' EXIT
-    uv run adsb serve {{ARGS}} &
+    uv run adsb start backend {{ARGS}} &
     (cd frontend && bun run dev) &
     wait
 
 # Run only the backend, API-only (no bundled UI). Pair with `just dev-frontend` or
-# `adsb ui` on another machine.
+# `adsb start frontend` on another machine.
 # Example: just dev-backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 dev-backend *ARGS:
-    uv run adsb serve --no-ui {{ARGS}}
+    uv run adsb start backend --no-ui {{ARGS}}
 
 # Run only the Vite dev server, proxying /api/* to a backend (local or remote).
 # Example: just dev-frontend http://receiver.local:8000
@@ -24,9 +24,9 @@ dev-frontend API_URL="http://localhost:8000":
     cd frontend && ADSB_API_URL={{API_URL}} bun run dev
 
 # Serve the bundled map UI as a client of a remote backend (run `just build` first).
-# Example: just ui http://receiver.local:8000 --host 0.0.0.0
-ui API_URL *ARGS:
-    uv run adsb ui --api-url {{API_URL}} {{ARGS}}
+# Example: just frontend http://receiver.local:8000 --host 0.0.0.0
+frontend API_URL *ARGS:
+    uv run adsb start frontend --api-url {{API_URL}} {{ARGS}}
 
 # Install the frontend toolchain. Run once on a fresh checkout.
 bootstrap:
@@ -54,9 +54,9 @@ build:
     cp -r frontend/dist/. adsb/static/
 
 # Run the bundled single-process server (run `just build` first).
-# Example: MAPBOX_TOKEN=pk.… just serve --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
-serve *ARGS:
-    uv run adsb serve {{ARGS}}
+# Example: MAPBOX_TOKEN=pk.… just backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+backend *ARGS:
+    uv run adsb start backend {{ARGS}}
 
 # Remove the bundled frontend (preserves adsb/static/.gitkeep).
 clean:

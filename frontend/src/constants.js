@@ -5,7 +5,7 @@
 // API Configuration
 // Runtime config (window.APP_CONFIG from /config.js) takes precedence over build-time
 // env vars so a single bundled wheel can serve any user without a per-token rebuild.
-// An empty API_URL means same-origin: the server hosting this page (adsb serve, adsb ui,
+// An empty API_URL means same-origin: the server hosting this page (adsb start backend, adsb start frontend,
 // or the Vite dev proxy) forwards /api/* to the backend.
 const runtime = (typeof window !== 'undefined' && window.APP_CONFIG) || {}
 export const API_URL = (runtime.apiUrl || import.meta.env.VITE_API_URL || '').replace(/\/+$/, '')

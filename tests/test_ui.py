@@ -1,4 +1,4 @@
-"""Tests for the standalone map UI server (`adsb ui`)."""
+"""Tests for the standalone map UI server (`adsb start frontend`)."""
 
 import httpx
 import pytest
@@ -21,7 +21,7 @@ def static_dir(tmp_path):
 
 @pytest.fixture
 def backend(test_db, test_session, aircraft):
-    """An in-process `adsb serve` backend with one aircraft and two positions."""
+    """An in-process backend with one aircraft and two positions."""
     for i in range(2):
         test_session.add(
             AircraftPosition(

@@ -1,7 +1,7 @@
 """Standalone map UI server that proxies to a remote ADS-B API.
 
 Lets the bundled frontend run as a client on a different machine from the
-decoder. ``adsb ui --api-url http://receiver:8000`` serves the SPA locally and
+decoder. ``adsb start frontend --api-url http://receiver:8000`` serves the SPA locally and
 forwards ``/api/*`` (and ``/config.js``) to the backend, so the browser only ever
 talks same-origin and the backend needs no CORS configuration.
 """
@@ -80,7 +80,7 @@ def create_ui_app(
     Parameters
     ----------
     api_url : str
-        Base URL of the ``adsb serve`` backend to proxy to
+        Base URL of the ``adsb start backend`` backend to proxy to
     static_dir : Path, optional
         Directory holding the built frontend; defaults to the bundled one
     transport : httpx.AsyncBaseTransport, optional

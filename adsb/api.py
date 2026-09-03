@@ -182,12 +182,12 @@ def create_app(
         Network client instance for graceful shutdown
     serve_ui : bool, optional
         Serve the bundled map UI at ``/`` when it is available. Pass ``False``
-        to run API-only (the UI is hosted elsewhere, e.g. via ``adsb ui``).
+        to run API-only (the UI is hosted elsewhere, e.g. via ``adsb start frontend``).
     cors_origins : iterable of str, optional
         Extra browser origins allowed to call ``/api/*`` cross-origin. Use
         ``["*"]`` to allow any origin. Needed when the UI is served from a
         different host/port than this API and does not proxy through
-        ``adsb ui`` or the Vite dev server.
+        ``adsb start frontend`` or the Vite dev server.
 
     Returns
     -------
@@ -217,7 +217,7 @@ def create_app(
     ui_enabled = serve_ui and frontend_is_bundled()
 
     # Same-origin serving needs no CORS. Whenever the UI lives elsewhere (dev
-    # server, `adsb ui` on another machine, static hosting), allow the local dev
+    # server, `adsb start frontend` on another machine, static hosting), allow the local dev
     # origins automatically plus whatever the operator configured explicitly.
     origins = parse_cors_origins(cors_origins)
     if not ui_enabled and origins != ["*"]:

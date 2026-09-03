@@ -33,7 +33,7 @@ dependencies = [
     "pydantic>=2.9.0",
     "click>=8.1.0",
     "python-dotenv>=1.0.0",
-    # `adsb ui` reverse-proxies /api/* to a remote backend.
+    # `adsb start frontend` reverse-proxies /api/* to a remote backend.
     "httpx>=0.27.0",
     # Resolves the per-user data dir holding the downloaded aircraft database.
     "platformdirs>=4.0.0",

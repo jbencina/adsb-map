@@ -32,6 +32,7 @@ function App() {
   const [refreshInterval, setRefreshInterval] = useState(DEFAULT_REFRESH_INTERVAL)
   const [maxAgeMinutes, setMaxAgeMinutes] = useState(DEFAULT_MAX_AGE_MINUTES)
   const [showTracks, setShowTracks] = useState(false)
+  const [showLabels, setShowLabels] = useState(false)
   const [isTrackingAircraft, setIsTrackingAircraft] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const settingsRef = useRef(null)
@@ -183,6 +184,20 @@ function App() {
                   </span>
                 </div>
 
+                <div className="control-row show-labels-toggle">
+                  <label htmlFor="show-labels">Show callsigns</label>
+                  <input
+                    id="show-labels"
+                    className="switch"
+                    type="checkbox"
+                    role="switch"
+                    checked={showLabels}
+                    onChange={e => setShowLabels(e.target.checked)}
+                    aria-label="Toggle aircraft callsign labels"
+                    aria-checked={showLabels}
+                  />
+                </div>
+
                 <div
                   className={`control-row show-tracks-toggle ${isTrackingAircraft ? 'disabled' : ''}`}
                 >
@@ -249,6 +264,7 @@ function App() {
           mapboxToken={MAPBOX_TOKEN}
           tracks={tracks}
           showTracks={showTracks}
+          showLabels={showLabels}
           maxAgeMinutes={maxAgeMinutes}
           onTrackingAircraft={setIsTrackingAircraft}
           theme={appliedTheme}

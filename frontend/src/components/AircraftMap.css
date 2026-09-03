@@ -120,6 +120,78 @@
   --marker-halo: rgba(26, 26, 26, 0.85);
 }
 
+/* Callsign tags ------------------------------------------------------------ */
+
+/* Sits above the map canvas and below the plane markers (which carry z-index 1 and 2) */
+.tag-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.tag-leaders {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.tag-leaders line {
+  stroke: var(--leader);
+  stroke-width: 1;
+}
+
+.tag-leaders line.selected {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.tag {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  height: 19px;
+  padding: 0 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--tag-bg);
+  border: 1px solid var(--tag-line);
+  box-shadow: var(--tag-shadow);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: calc(1 - var(--age, 0) * 0.45);
+}
+
+.tag.selected {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+
+:root {
+  --tag-bg: #ffffff;
+  --tag-line: rgba(0, 0, 0, 0.2);
+  --tag-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
+  --leader: rgba(0, 0, 0, 0.4);
+}
+
+[data-theme='dark'] {
+  --tag-bg: #0b0b0d;
+  --tag-line: rgba(255, 255, 255, 0.22);
+  --tag-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  --leader: rgba(255, 255, 255, 0.45);
+}
+
 /* Empty-state hint --------------------------------------------------------- */
 
 .sidebar-placeholder {

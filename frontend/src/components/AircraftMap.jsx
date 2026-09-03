@@ -16,6 +16,7 @@ import {
   SELECTED_TRACK_WIDTH,
   AIRCRAFT_GLYPH,
 } from '../constants'
+import AircraftTags from './AircraftTags'
 import './AircraftMap.css'
 
 /**
@@ -26,6 +27,7 @@ import './AircraftMap.css'
  * @param {string} props.mapboxToken - MapBox API token
  * @param {Object} props.tracks - Map of icao24 to array of position points
  * @param {boolean} props.showTracks - Whether to display tracks
+ * @param {boolean} props.showLabels - Whether to draw a callsign tag beside each aircraft
  * @param {string} props.theme - Current theme ('light' or 'dark')
  * @returns {JSX.Element} The map component
  */
@@ -34,6 +36,7 @@ function AircraftMap({
   mapboxToken,
   tracks = {},
   showTracks = false,
+  showLabels = false,
   maxAgeMinutes = 5,
   onTrackingAircraft,
   theme = 'light',
@@ -43,6 +46,7 @@ function AircraftMap({
   const [selectedAircraftTrack, setSelectedAircraftTrack] = useState(null)
   const [loadingTrack, setLoadingTrack] = useState(false)
   const [viewport, setViewport] = useState(DEFAULT_MAP_CENTER)
+  const [mapInstance, setMapInstance] = useState(null)
 
   // Track if we've done initial centering
   const [hasInitialized, setHasInitialized] = useState(false)
@@ -161,7 +165,7 @@ function AircraftMap({
   }, [selectedAircraft, onTrackingAircraft])
 
   // Filter aircraft with valid positions
-  const validAircraft = aircraft.filter(a => a.latitude && a.longitude)
+  const validAircraft = useMemo(() => aircraft.filter(a => a.latitude && a.longitude), [aircraft])
 
   // Select map style and track colors based on theme
   const isDark = theme === 'dark'
@@ -288,6 +292,7 @@ function AircraftMap({
         mapboxAccessToken={mapboxToken}
         style={{ width: '100%', height: '100%' }}
         mapStyle={mapStyle}
+        onLoad={e => setMapInstance(e.target)}
       >
         {/* Render all aircraft tracks (only when not showing selected aircraft track) */}
         {showTracks && !selectedAircraftTrack && (
@@ -408,6 +413,15 @@ function AircraftMap({
           </Marker>
         ))}
       </Map>
+
+      {/* Callsign tags with leader lines, laid out in screen space beneath the plane markers */}
+      <AircraftTags
+        map={mapInstance}
+        aircraft={validAircraft}
+        selectedId={selectedAircraft?.icao24 ?? null}
+        maxAgeMinutes={maxAgeMinutes}
+        visible={showLabels}
+      />
 
       {/* Detail card for the selected aircraft */}
       <div className={`aircraft-sidebar ${selectedAircraft ? 'active' : ''}`}>
@@ -565,6 +579,7 @@ AircraftMap.propTypes = {
   mapboxToken: PropTypes.string.isRequired,
   tracks: PropTypes.objectOf(PropTypes.arrayOf(PropTypes.arrayOf(PropTypes.number))),
   showTracks: PropTypes.bool,
+  showLabels: PropTypes.bool,
   maxAgeMinutes: PropTypes.number,
   onTrackingAircraft: PropTypes.func,
   theme: PropTypes.oneOf(['light', 'dark']),
@@ -573,6 +588,7 @@ AircraftMap.propTypes = {
 AircraftMap.defaultProps = {
   tracks: {},
   showTracks: false,
+  showLabels: false,
   maxAgeMinutes: 5,
   onTrackingAircraft: null,
   theme: 'light',

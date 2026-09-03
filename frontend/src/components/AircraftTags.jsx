@@ -32,6 +32,17 @@ function pillWidth(text) {
 const labelFor = ac => ac.callsign?.replace(/_+$/, '') || ac.icao24.toUpperCase()
 
 /**
+ * How far a contact has aged toward expiry, 0 (just heard) to 1 (about to expire)
+ *
+ * @param {Object} ac - Aircraft with a `lastseen` unix timestamp
+ * @param {number} maxAgeMinutes - Age at which a contact expires
+ * @param {number} now - Current unix time in seconds
+ * @returns {number} Age ratio between 0 and 1
+ */
+const ageOf = (ac, maxAgeMinutes, now) =>
+  ac.lastseen ? Math.min((now - ac.lastseen) / 60 / maxAgeMinutes, 1) : 0
+
+/**
  * Callsign tags beside each plane, with a thin leader line back to the glyph.
  *
  * React owns one pill and one leader per aircraft; their positions are written
@@ -60,6 +71,7 @@ function AircraftTags({ map, aircraft, selectedId, maxAgeMinutes, visible }) {
 
     const place = () => {
       const canvas = map.getCanvas()
+      const now = Math.floor(Date.now() / 1000)
       const items = aircraft.map(ac => {
         const label = labelFor(ac)
         const point = map.project([ac.longitude, ac.latitude])
@@ -71,7 +83,7 @@ function AircraftTags({ map, aircraft, selectedId, maxAgeMinutes, visible }) {
           w: pillWidth(label),
           h: TAG_HEIGHT,
           selected: ac.icao24 === selectedId,
-          age: ac.age,
+          age: ageOf(ac, maxAgeMinutes, now),
         }
       })
       const placed = layoutTags(items, { width: canvas.clientWidth, height: canvas.clientHeight })
@@ -107,12 +119,11 @@ function AircraftTags({ map, aircraft, selectedId, maxAgeMinutes, visible }) {
       map.off('move', place)
       map.off('resize', place)
     }
-  }, [map, aircraft, selectedId, visible])
+  }, [map, aircraft, selectedId, maxAgeMinutes, visible])
 
   if (!visible) return null
 
   const now = Math.floor(Date.now() / 1000)
-  const ageOf = ac => (ac.lastseen ? Math.min((now - ac.lastseen) / 60 / maxAgeMinutes, 1) : 0)
 
   return (
     <div className="tag-layer" ref={layerRef} aria-hidden="true">
@@ -131,7 +142,7 @@ function AircraftTags({ map, aircraft, selectedId, maxAgeMinutes, visible }) {
           key={ac.icao24}
           data-id={ac.icao24}
           className={`tag ${ac.icao24 === selectedId ? 'selected' : ''}`}
-          style={{ '--age': ageOf(ac) }}
+          style={{ '--age': ageOf(ac, maxAgeMinutes, now) }}
           hidden
         >
           {labelFor(ac)}

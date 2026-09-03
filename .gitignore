@@ -58,7 +58,7 @@ data/aircraft.csv.gz
 adsb/static/*
 !adsb/static/.gitkeep
 
-# Local environment file (loaded by `adsb serve` via python-dotenv).
+# Local environment file (loaded by the `adsb` CLI via python-dotenv; secrets only).
 # Keep .env.example tracked as a template.
 .env
 !.env.example

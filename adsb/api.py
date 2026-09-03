@@ -1,15 +1,12 @@
-"""FastAPI application for ADS-B REST API."""
+"""FastAPI application for the ADS-B REST API.
 
-import json
-import logging
-import os
+API only: the map UI is a separate service (`adsb start frontend`, see `adsb.ui`)
+that proxies to this one, so nothing here serves HTML, static files or CORS.
+"""
+
 from contextlib import asynccontextmanager
-from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi import Depends, FastAPI, Query
 from sqlalchemy.orm import Session
 
 from adsb import __version__
@@ -19,11 +16,27 @@ from adsb.schemas import AircraftStateSchema, SensorSchema, TrackPointSchema
 
 # Constants
 MAX_METADATA_RECORDS = 4  # Match jet1090 API format - last 4 reception metadata
-STATIC_DIR = Path(__file__).parent / "static"
 
 # Global instances
 db_instance: Database | None = None
 network_client_instance = None
+
+
+def api_index() -> dict:
+    """Discovery document served at ``/`` and ``/api``."""
+    return {
+        "message": "Welcome to the ADS-B REST API!",
+        "routes": {
+            "/api/all": "returns all current state vectors",
+            "/api/icao24": "returns all ICAO 24-bit addresses seen",
+            "/api/track?icao24={icao24}&since={timestamp}": (
+                "returns the trajectory of a given aircraft"
+            ),
+            "/api/sensors": "returns information about all sensors",
+            "/docs": "interactive OpenAPI documentation",
+        },
+        "map_ui": "run `adsb start frontend --api-url <this server>` and open its port",
+    }
 
 
 def get_db() -> Database:
@@ -57,40 +70,6 @@ def get_session():
     database = get_db()
     with database.get_session() as session:
         yield session
-
-
-#: Shown at `/` when the SPA was never built. Without this the request fell through
-#: to a bare FastAPI 404, which gave no hint that a frontend build was the missing step.
-FRONTEND_MISSING_HELP = (
-    "Frontend not bundled (adsb/static/ is empty). "
-    "Run `just build` to bundle it, `just dev` for hot-reload dev mode, "
-    "or install the published wheel with `pip install adsb-map`."
-)
-
-FRONTEND_MISSING_HTML = """<!doctype html>
-<title>ADS-B - frontend not built</title>
-<style>
-  body { font: 15px/1.6 system-ui, sans-serif; max-width: 34rem; margin: 4rem auto; padding: 0 1rem; }
-  code { background: #8881; padding: .15em .4em; border-radius: 3px; }
-  li { margin: .4em 0; }
-</style>
-<h1>Frontend not built</h1>
-<p>The API is running, but the map UI was never bundled into
-<code>adsb/static/</code>, so there is nothing to serve here.</p>
-<ul>
-  <li><code>just build</code> - build the SPA and serve it from this port</li>
-  <li><code>just dev</code> - hot-reload dev server on port 3000</li>
-  <li><code>pip install adsb-map</code> - the published wheel ships it prebuilt</li>
-</ul>
-<p><code>just build</code> needs <a href="https://bun.sh">bun</a>; run
-<code>just bootstrap</code> first if it is missing.</p>
-<p>The REST API is unaffected: <a href="/api">/api</a></p>
-"""
-
-
-def frontend_is_bundled() -> bool:
-    """Return True when the built frontend has been staged into the package."""
-    return STATIC_DIR.is_dir() and (STATIC_DIR / "index.html").is_file()
 
 
 def create_app(database: Database, network_client=None) -> FastAPI:
@@ -129,22 +108,6 @@ def create_app(database: Database, network_client=None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS is only required when the frontend runs as a separate dev server.
-    # In a bundled wheel the frontend is served same-origin from this app.
-    if not frontend_is_bundled():
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=[
-                "http://localhost:3000",
-                "http://127.0.0.1:3000",
-                "http://localhost:5173",
-                "http://127.0.0.1:5173",
-            ],
-            allow_credentials=False,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-
     @app.get("/api")
     async def api_root():
         """
@@ -155,17 +118,14 @@ def create_app(database: Database, network_client=None) -> FastAPI:
         dict
             Welcome message and available routes
         """
-        return {
-            "message": "Welcome to the ADS-B REST API!",
-            "routes": {
-                "/api/all": "returns all current state vectors",
-                "/api/icao24": "returns all ICAO 24-bit addresses seen",
-                "/api/track?icao24={icao24}&since={timestamp}": (
-                    "returns the trajectory of a given aircraft"
-                ),
-                "/api/sensors": "returns information about all sensors",
-            },
-        }
+        return api_index()
+
+    # The backend has no UI, so `/` answers with the same discovery document
+    # instead of a bare 404 -- someone opening port 8000 in a browser should
+    # learn where the data is.
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return api_index()
 
     @app.get("/api/all", response_model=list[AircraftStateSchema])
     async def get_all_aircraft(session: Session = Depends(get_session)):
@@ -319,41 +279,5 @@ def create_app(database: Database, network_client=None) -> FastAPI:
         )
 
         return [SensorSchema(serial=serial[0]) for serial in serials]
-
-    # Runtime config shim: server env vars become window.APP_CONFIG so a single
-    # wheel works across users without rebuilding the JS bundle per Mapbox token.
-    # Registered in both modes so the dev server (via Vite proxy) doesn't 404.
-    @app.get("/config.js", include_in_schema=False)
-    async def config_js():
-        config = {
-            "mapboxToken": os.environ.get("MAPBOX_TOKEN", ""),
-            "apiUrl": "",
-        }
-        return Response(
-            content=f"window.APP_CONFIG = {json.dumps(config)};",
-            media_type="application/javascript",
-        )
-
-    if frontend_is_bundled():
-        app.mount(
-            "/assets",
-            StaticFiles(directory=STATIC_DIR / "assets"),
-            name="assets",
-        )
-
-        # SPA fallback: any non-API path serves index.html so client-side routing works.
-        # Unmatched /api/* paths return 404 instead of leaking the SPA shell.
-        @app.get("/{full_path:path}", include_in_schema=False)
-        async def spa_fallback(full_path: str):
-            if full_path.startswith("api/") or full_path == "api":
-                raise HTTPException(status_code=404)
-            return FileResponse(STATIC_DIR / "index.html")
-    else:
-        logging.getLogger("adsb").warning(FRONTEND_MISSING_HELP)
-
-        # Only `/` is claimed, so unmatched API paths keep returning an honest 404.
-        @app.get("/", include_in_schema=False)
-        async def frontend_missing():
-            return HTMLResponse(FRONTEND_MISSING_HTML, status_code=503)
 
     return app

@@ -2,7 +2,9 @@
 
 import os
 
+import pytest
 from click.testing import CliRunner
+from fastapi.testclient import TestClient
 
 from adsb.cli import main
 
@@ -41,20 +43,27 @@ def test_dotenv_does_not_override_existing_env(tmp_path, monkeypatch):
     assert os.environ["MAPBOX_TOKEN"] == "pk.from_process_env"
 
 
-def test_aircraft_db_path_prefers_env_override(tmp_path, monkeypatch):
-    """ADSB_AIRCRAFT_DB is the single supported way to relocate the database."""
-    from adsb.aircraft_db import AIRCRAFT_DB_ENV, aircraft_db_path
+@pytest.fixture(autouse=True)
+def _reset_aircraft_db_path():
+    """`--aircraft-db` sets process-wide state; never leak it between tests."""
+    import adsb.aircraft_db
 
-    target = tmp_path / "custom" / "aircraft.csv"
-    monkeypatch.setenv(AIRCRAFT_DB_ENV, str(target))
-    assert aircraft_db_path() == target
+    yield
+    adsb.aircraft_db.set_aircraft_db_path(None)
+
+
+def test_aircraft_db_not_configurable_via_env(tmp_path, monkeypatch):
+    """`.env` is for tokens only; the old ADSB_AIRCRAFT_DB env var is ignored."""
+    from adsb.aircraft_db import aircraft_db_path
+
+    monkeypatch.setenv("ADSB_AIRCRAFT_DB", str(tmp_path / "ignored.csv"))
+    assert aircraft_db_path() != tmp_path / "ignored.csv"
 
 
 def test_aircraft_db_path_is_cwd_independent(tmp_path, monkeypatch):
     """The default location must not depend on where the CLI was launched from."""
-    from adsb.aircraft_db import AIRCRAFT_DB_ENV, aircraft_db_path
+    from adsb.aircraft_db import aircraft_db_path
 
-    monkeypatch.delenv(AIRCRAFT_DB_ENV, raising=False)
     monkeypatch.chdir(tmp_path)
     from_tmp = aircraft_db_path()
     monkeypatch.chdir(tmp_path.parent)
@@ -62,26 +71,23 @@ def test_aircraft_db_path_is_cwd_independent(tmp_path, monkeypatch):
     assert from_tmp.name == "aircraft.csv"
 
 
-def test_download_skips_when_already_present(tmp_path, monkeypatch):
+def test_download_skips_when_already_present(tmp_path):
     """`adsb download` is a no-op without --force, so it never re-fetches 9MB."""
-    from adsb.aircraft_db import AIRCRAFT_DB_ENV
-
     existing = tmp_path / "aircraft.csv"
     existing.write_text("abc123;N1;C172;;CESSNA 172\n")
-    monkeypatch.setenv(AIRCRAFT_DB_ENV, str(existing))
 
-    result = CliRunner().invoke(main, ["download"])
+    result = CliRunner().invoke(main, ["download", "--aircraft-db", str(existing)])
 
     assert result.exit_code == 0, result.output
     assert "already present" in result.output
     assert existing.read_text().startswith("abc123")
 
 
-def test_loader_reads_the_path_download_writes(tmp_path, monkeypatch):
+def test_loader_reads_the_path_download_writes(tmp_path):
     """Writer and reader resolve to the same file -- the pip-install enrichment bug."""
-    from adsb.aircraft_db import AIRCRAFT_DB_ENV, AircraftDatabase, aircraft_db_path
+    from adsb.aircraft_db import AircraftDatabase, aircraft_db_path, set_aircraft_db_path
 
-    monkeypatch.setenv(AIRCRAFT_DB_ENV, str(tmp_path / "aircraft.csv"))
+    set_aircraft_db_path(tmp_path / "aircraft.csv")
     aircraft_db_path().write_text("abc123;N1;C172;;CESSNA 172\n")
 
     assert AircraftDatabase().lookup("abc123") == {
@@ -89,3 +95,173 @@ def test_loader_reads_the_path_download_writes(tmp_path, monkeypatch):
         "typecode": "C172",
         "type_description": "CESSNA 172",
     }
+
+
+@pytest.fixture
+def no_uvicorn(monkeypatch):
+    """Capture uvicorn.run kwargs instead of binding a port (which would hang the test)."""
+    import adsb.cli
+
+    launched = {}
+    monkeypatch.setattr(adsb.cli.uvicorn, "run", lambda app, **kw: launched.update(kw, app=app))
+    return launched
+
+
+@pytest.fixture(autouse=True)
+def _no_bundled_frontend(tmp_path, monkeypatch):
+    """Never let a test depend on whether this checkout has run `just build`."""
+    import adsb.ui
+
+    monkeypatch.setattr(adsb.ui, "STATIC_DIR", tmp_path / "unbuilt")
+
+
+@pytest.fixture
+def built_frontend(tmp_path, monkeypatch):
+    """Point adsb.ui at a minimal built frontend."""
+    import adsb.ui
+
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html></html>")
+    monkeypatch.setattr(adsb.ui, "STATIC_DIR", static_dir)
+    return static_dir
+
+
+def test_ui_requires_built_frontend(no_uvicorn):
+    """Without `just build`, `adsb start frontend` fails with guidance instead of starting."""
+    result = CliRunner().invoke(main, ["start", "frontend", "--api-url", "http://receiver:8000"])
+
+    assert result.exit_code != 0
+    assert "Frontend not bundled" in result.output
+
+
+def test_ui_rejects_url_without_scheme(built_frontend, no_uvicorn):
+    result = CliRunner().invoke(main, ["start", "frontend", "--api-url", "receiver:8000"])
+
+    assert result.exit_code != 0
+    assert "http://host:port" in result.output
+
+
+def test_ui_launches_proxy_app(tmp_path, monkeypatch, built_frontend, no_uvicorn):
+    monkeypatch.chdir(tmp_path)  # keep the repo's own .env out of the picture
+    monkeypatch.delenv("MAPBOX_TOKEN", raising=False)
+
+    result = CliRunner().invoke(
+        main, ["start", "frontend", "--api-url", "http://receiver.local:8000/", "--port", "3456"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert no_uvicorn["app"].state.api_url == "http://receiver.local:8000"
+    assert no_uvicorn["port"] == 3456
+    assert "[!!] MAPBOX_TOKEN unset" in result.output
+
+
+def test_frontend_defaults_to_local_backend(tmp_path, monkeypatch, built_frontend, no_uvicorn):
+    """Single-machine use is just `adsb start backend` + `adsb start frontend`."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MAPBOX_TOKEN", "pk.local")
+    monkeypatch.delenv("ADSB_API_URL", raising=False)
+
+    result = CliRunner().invoke(main, ["start", "frontend"])
+
+    assert result.exit_code == 0, result.output
+    assert no_uvicorn["app"].state.api_url == "http://127.0.0.1:8000"
+    assert "[ok] Mapbox token set" in result.output
+
+
+def test_backend_is_api_only(tmp_path, monkeypatch, no_uvicorn):
+    """The backend never serves the UI and has no flag about it."""
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["start", "backend", "--db-path", str(tmp_path / "t.db")])
+
+    assert result.exit_code == 0, result.output
+    assert "Map UI" not in result.output
+    assert "MAPBOX" not in result.output
+
+    client = TestClient(no_uvicorn["app"])
+    assert client.get("/").status_code == 200
+    assert "routes" in client.get("/").json()
+    assert client.get("/api").status_code == 200
+
+    assert CliRunner().invoke(main, ["start", "backend", "--no-ui"]).exit_code != 0
+
+
+def test_serve_aircraft_db_option_applies_before_preflight(tmp_path, monkeypatch, no_uvicorn):
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "planes.csv"
+    target.write_text("abc123;N1;C172;;CESSNA 172\n")
+
+    result = CliRunner().invoke(
+        main,
+        ["start", "backend", "--aircraft-db", str(target), "--db-path", str(tmp_path / "t.db")],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"[ok] Aircraft database: {target}" in result.output
+
+
+def test_backend_status_reporter_lifecycle(tmp_path, monkeypatch, no_uvicorn):
+    """The reporter starts before uvicorn and is stopped when uvicorn returns."""
+    import adsb.cli
+
+    monkeypatch.chdir(tmp_path)
+    started = []
+    orig_start = adsb.cli.StatusReporter.start
+    orig_stop = adsb.cli.StatusReporter.stop
+    monkeypatch.setattr(
+        adsb.cli.StatusReporter, "start", lambda self: started.append(self) or orig_start(self)
+    )
+    stopped = []
+    monkeypatch.setattr(
+        adsb.cli.StatusReporter, "stop", lambda self: stopped.append(self) or orig_stop(self)
+    )
+
+    result = CliRunner().invoke(
+        main, ["start", "backend", "--db-path", str(tmp_path / "t.db"), "--stats-interval", "5"]
+    )
+    assert result.exit_code == 0, result.output
+    assert len(started) == 1 and started[0].interval == 5
+    assert stopped == started
+
+    started.clear()
+    result = CliRunner().invoke(
+        main, ["start", "backend", "--db-path", str(tmp_path / "t.db"), "--stats-interval", "0"]
+    )
+    assert result.exit_code == 0, result.output
+    assert started == []
+
+
+def test_backend_access_log_off_by_default(tmp_path, monkeypatch, no_uvicorn):
+    monkeypatch.chdir(tmp_path)
+    CliRunner().invoke(main, ["start", "backend", "--db-path", str(tmp_path / "t.db")])
+    assert no_uvicorn["log_config"]["loggers"]["uvicorn.access"]["level"] == "WARNING"
+
+    CliRunner().invoke(
+        main, ["start", "backend", "--db-path", str(tmp_path / "t.db"), "--access-log"]
+    )
+    assert no_uvicorn["log_config"]["loggers"]["uvicorn.access"]["level"] == "INFO"
+
+
+def test_backend_log_config_drops_invalid_http_noise(tmp_path, monkeypatch, no_uvicorn):
+    """Non-HTTP bytes on the port (HTTPS probes, scanners) must not spam the console."""
+    import logging.config
+
+    from adsb.cli import DropNoiseFilter
+
+    monkeypatch.chdir(tmp_path)
+    CliRunner().invoke(main, ["start", "backend", "--db-path", str(tmp_path / "t.db")])
+    config = no_uvicorn["log_config"]
+    assert "drop_noise" in config["handlers"]["default"]["filters"]
+
+    logging.config.dictConfig(config)  # must be a valid dictConfig, filter resolvable
+    handler = logging.getLogger("uvicorn.error").handlers[0]
+    noise = logging.LogRecord(
+        "uvicorn.error", logging.WARNING, "", 0, "Invalid HTTP request received.", None, None
+    )
+    real = logging.LogRecord(
+        "uvicorn.error", logging.WARNING, "", 0, "Unsupported upgrade request.", None, None
+    )
+    assert not handler.filter(noise)
+    assert handler.filter(real)
+    assert isinstance(handler.filters[0], DropNoiseFilter)

@@ -26,12 +26,12 @@ uv run adsb download
 ```
 
 It is written to a per-user data directory (`~/.local/share/adsb-map/aircraft.csv` on
-Linux), **not** to this directory, so it is found regardless of where `adsb serve` runs
-from. Override the location with the `ADSB_AIRCRAFT_DB` environment variable.
+Linux), **not** to this directory, so it is found regardless of where `adsb start backend` runs
+from. Override the location with `--aircraft-db PATH` (pass the same path to `adsb start backend`).
 
 This will:
 1. Download the compressed database (~9MB) from tar1090-db
-2. Extract it to `data/aircraft.csv` (~32MB)
+2. Extract it to the location above (~32MB)
 3. Display statistics about the downloaded records
 
 ## Updating the Database

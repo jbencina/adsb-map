@@ -14,31 +14,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ever wrote to. Registration, type code, and type description came back `null` forever,
   signalled only by a warning emitted lazily mid-decode. Both sides now resolve the same
   per-user data directory via `aircraft_db.aircraft_db_path()`.
-- A source checkout with no frontend build returned a bare `{"detail":"Not Found"}` at
-  `/`, giving no hint that `just build` was the missing step. `/` now serves an
-  explanatory 503 page, and the accompanying log line is a warning rather than info.
+- A source checkout with no frontend build gave no hint that `just build` was the missing
+  step. `adsb start frontend` now refuses to start with an explanatory error.
 
 ### Added
-- `adsb serve` prints startup checks for the four conditions that otherwise fail
-  silently: frontend bundled, aircraft database present, `MAPBOX_TOKEN` set, and data
-  source configured.
-- `ADSB_AIRCRAFT_DB` environment variable overrides the aircraft database location
-  (honoured from `.env` like `MAPBOX_TOKEN`).
+- **Backend and frontend are separate services** that can run on different machines.
+  - `adsb start backend` is the decoder + REST API and nothing else: no HTML, no static
+    files, no CORS.
+  - `adsb start frontend [--api-url http://receiver:8000]` serves the bundled map and
+    reverse-proxies `/api/*` to the backend (same machine by default), so the browser
+    stays same-origin and the backend needs no CORS configuration. It serves `/config.js`
+    from its own `MAPBOX_TOKEN`, so the token lives with the UI. A backend that is down
+    surfaces as a 502/504 JSON error.
+  - `ADSB_API_URL=http://receiver:8000 bun run dev` (or `just dev-frontend URL`) points
+    the Vite dev/preview proxy at a remote backend; Vite serves its own `/config.js` from
+    `VITE_MAPBOX_TOKEN`. New `just backend`, `just frontend`, `just dev-frontend` recipes.
+- Startup checks for the conditions that otherwise fail silently: `adsb start backend`
+  reports the aircraft database and data source; `adsb start frontend` reports
+  `MAPBOX_TOKEN`.
+- `adsb start backend` prints a `[STATUS]` line every `--stats-interval` seconds (default
+  10, `0` disables): feed address, time since the last message (flagging a stalled feed),
+  messages/positions/aircraft in the window with the message rate, aircraft currently
+  tracked, and cumulative totals. Replaces the old telemetry lines, which only fired while
+  messages were flowing.
+- `GET /` on the backend returns the same discovery JSON as `/api` (now also listing
+  `/docs`) instead of a 404, so opening port 8000 in a browser explains where the data is.
+- `--aircraft-db PATH` on `adsb start backend`, `adsb download` and `adsb decode` overrides the
+  aircraft database location.
 - `just bootstrap` installs bun; `just build` now fails with an actionable message when
   bun is missing instead of a bare "command not found".
 - `adsb download --force`; without it the command is a no-op when the database is
   already present rather than re-fetching ~9MB.
 
 ### Changed
+- **Breaking:** `adsb serve` is replaced by `adsb start backend` + `adsb start frontend`.
+  The backend no longer serves the map at `/` or `/config.js`; visit the frontend's port
+  (3000 by default) instead. `just serve` → `just backend`.
 - `adsb download` streams the gzip straight to CSV via a `.partial` temp file, so no
   `aircraft.csv.gz` is left on disk and a failed download cannot leave a truncated CSV
   where the loader would read it.
-- **Breaking:** `adsb download --data-dir` is removed; use `ADSB_AIRCRAFT_DB` instead.
-  Single supported location, single override mechanism.
+- **Breaking:** `adsb download --data-dir` is removed; use `--aircraft-db PATH` instead
+  (same flag on `start backend` and `decode`). Single supported location, single
+  override mechanism.
+- `.env` is for secrets only (`MAPBOX_TOKEN`); every other setting is a CLI argument.
+  Configuration is never read from `ADSB_*` environment variables.
+- CORS middleware is removed from the backend: every browser path (bundled UI and Vite
+  dev server) reaches the API through a same-origin proxy.
+- Everything browser-facing (static files, SPA fallback, `/config.js`) moved from
+  `adsb.api` to the new `adsb.ui` module; `adsb.api` is JSON only.
+- `httpx` is now a runtime dependency (used by the `adsb start frontend` proxy).
+- Per-request HTTP access logging on the backend is off by default (the map polls
+  `/api/all` every second, drowning everything else); `--access-log` re-enables it.
+- uvicorn's "Invalid HTTP request received." warning is filtered out of the backend
+  console. It fires whenever non-HTTP bytes hit the port (a browser trying HTTPS, a LAN
+  device probing) and is routine noise on a server bound to `0.0.0.0`.
+- `ADSBNetworkClient` exposes `snapshot()` for thread-safe stats; the `telemetry_interval`
+  argument and `_log_telemetry` are gone.
 - **Breaking:** `AircraftDatabase` no longer auto-extracts a sibling `aircraft.csv.gz`;
   `adsb download` is the one supported way to obtain the database.
-- `adsb.api._frontend_is_bundled` is now public `frontend_is_bundled` (used by the CLI
-  preflight).
+- `adsb.api._frontend_is_bundled` is now `adsb.ui.frontend_is_bundled`.
 
 ### Removed
 - `MANIFEST.in`, which was dead — hatchling ignores it, and its `recursive-include adsb
@@ -131,4 +165,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions CI workflow testing Python 3.12 and 3.13
 - Tox configuration for multi-version testing
 - Complete API documentation in README
-

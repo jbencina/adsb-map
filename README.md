@@ -8,28 +8,36 @@
 
 ADS-B decoder and REST API server using [pyModeS](https://github.com/junzis/pyModeS) for
 decoding Mode-S and ADS-B messages. Mirrors the [jet1090](https://github.com/xoolive/rs1090/)
-REST API interface with a Python-based implementation, plus a built-in interactive map.
+REST API interface with a Python-based implementation, plus an interactive map that runs as
+a separate service — on the same machine or anywhere that can reach the API.
 
 ![Map interface demo](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/map.png)
 
 ## Quickstart
 
-The published wheel bundles the React UI; FastAPI serves the API and map on a single port.
-You only need Python — no Node, no bun, no Docker.
+Two services: the **backend** (decoder + REST API) and the **frontend** (map UI). The
+published wheel contains both, including the prebuilt React UI, so you only need Python —
+no Node, no bun, no Docker.
 
 ```bash
 pip install adsb-map
 adsb download                                # one-time: aircraft database (~30MB)
 
-# Free Mapbox token: https://account.mapbox.com/access-tokens/
-# Either export it in your shell, or drop it in a `.env` file in the directory
-# you run `adsb serve` from (template: see .env.example in the repo).
-export MAPBOX_TOKEN=pk.your_token_here
+# Terminal 1 — on the machine attached to the receiver:
+adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 
-adsb serve --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+# Terminal 2 — wherever you want to look at the map (same machine, or a laptop):
+# Free Mapbox token: https://account.mapbox.com/access-tokens/
+# Export it, or put it in a `.env` file in the directory you run this from.
+export MAPBOX_TOKEN=pk.your_token_here
+adsb start frontend                          # add --api-url http://receiver:8000 if remote
 ```
 
-Visit http://localhost:8000/. Aircraft show up as markers; click one for its track.
+Visit http://localhost:3000/. Aircraft show up as markers; click one for its track.
+
+The frontend proxies `/api/*` to the backend, so the browser only ever talks to the
+frontend process: no CORS, no per-machine build, and the Mapbox token stays with the UI.
+See [Running on separate machines](#running-on-separate-machines).
 
 ## Features
 
@@ -38,46 +46,68 @@ Visit http://localhost:8000/. Aircraft show up as markers; click one for its tra
   the [tar1090-db](https://github.com/wiedehopf/tar1090-db) project (566k+ records)
 - **REST API** — FastAPI endpoints under `/api/*`, jet1090-compatible
 - **SQLite storage** — aircraft state, position history, reception metadata
-- **Interactive map** — React + Mapbox GL, served same-origin from the wheel
+- **Interactive map** — React + Mapbox GL, prebuilt and shipped in the wheel
+- **Separate services** — backend on the receiver, frontend on any machine that can reach it
 - **Network data sources** — connects to dump1090 / readsb / modesdeco2 over TCP (Beast or raw)
 
 ## Configuration
 
+Everything is a CLI argument except the Mapbox token. `.env` is for secrets only.
+
 | Setting | Default | How to override |
 |---|---|---|
-| Mapbox token | (required for map UI) | `MAPBOX_TOKEN` env var, or `.env` file in CWD |
-| Bind host | `0.0.0.0` | `adsb serve --host` |
-| Bind port | `8000` | `adsb serve --port` |
-| Database path | `./adsb.db` | `adsb serve --db-path` |
-| Stale timeout | `60s` | `adsb serve --stale-timeout` |
-| Receiver lat/lon | (none) | `adsb serve --lat --lon` (recommended) |
-| Aircraft database | per-user data dir | `ADSB_AIRCRAFT_DB` env var, or `.env` file in CWD |
+| **Backend** | | |
+| Bind host / port | `0.0.0.0` / `8000` | `adsb start backend --host --port` |
+| Database path | `./adsb.db` | `adsb start backend --db-path` |
+| Stale timeout | `60s` | `adsb start backend --stale-timeout` |
+| Receiver lat/lon | (none) | `adsb start backend --lat --lon` (recommended) |
+| Aircraft database | per-user data dir | `--aircraft-db PATH` on `start backend`, `download`, `decode` |
+| Status line interval | `10s` | `adsb start backend --stats-interval` (`0` disables) |
+| HTTP access log | off | `adsb start backend --access-log` |
+| **Frontend** | | |
+| Backend URL | `http://127.0.0.1:8000` | `adsb start frontend --api-url` |
+| Bind host / port | `127.0.0.1` / `3000` | `adsb start frontend --host --port` (`--host 0.0.0.0` to share on the LAN) |
+| Mapbox token | (required) | `MAPBOX_TOKEN` env var, or `.env` file in CWD |
 
 `adsb download` writes the aircraft database to a per-user data directory
 (`~/.local/share/adsb-map/aircraft.csv` on Linux) rather than the working directory, so
-`adsb serve` finds it no matter where you launch it from. `adsb serve` prints a startup
-check confirming whether it was found.
+`adsb start backend` finds it no matter where you launch it from. Pass the same `--aircraft-db`
+to both if you relocate it. `adsb start backend` prints a startup check confirming whether it was
+found.
 
 `--lat` and `--lon` are strongly recommended: ADS-B position messages use Compact Position
 Reporting (CPR), which decodes faster and more accurately when given a reference position
 within ~180 NM of the receiver.
 
+While running, the backend prints a status line every `--stats-interval` seconds so you
+can tell at a glance whether the feed is alive and what it is decoding:
+
+```
+2026-09-02 19:05:10 - [STATUS] feed localhost:30005 (beast) | last msg <1s ago | 10s: 1,842 msgs (184/s), 131 pos, 27 ac | tracking 31 ac (24 w/ pos) | total 96,210 msgs, 7,455 pos, 142 ac
+```
+
+`last msg … (feed stalled?)` appears when nothing has arrived for over 30 seconds, and
+`no data yet` until the first message. Per-request HTTP logging is off by default because
+the map polls `/api/all` every second; `--access-log` turns it back on.
+
 ## CLI
 
 ```bash
-adsb serve …      # API + bundled map UI
-adsb download     # download tar1090-db aircraft database (--force to refresh)
-adsb init-db      # create SQLite tables
-adsb decode HEX   # decode a single message and store it
-adsb cleanup      # remove aircraft not seen in --stale-timeout
-adsb db-size      # show DB file size and row counts
+adsb start backend …    # decoder + REST API
+adsb start frontend …   # map UI, proxying to a backend (--api-url URL)
+adsb download           # download tar1090-db aircraft database (--force to refresh)
+adsb init-db            # create SQLite tables
+adsb decode HEX         # decode a single message and store it
+adsb cleanup            # remove aircraft not seen in --stale-timeout
+adsb db-size            # show DB file size and row counts
 ```
 
 Pass `--help` to any command for the full set of options.
 
 ## API endpoints
 
-All JSON endpoints live under `/api/`. The map UI is served at `/`.
+All JSON endpoints live under `/api/` on the backend. The frontend exposes the same
+paths (proxied) plus the map itself.
 
 | Endpoint | Returns |
 |---|---|
@@ -86,11 +116,40 @@ All JSON endpoints live under `/api/`. The map UI is served at `/`.
 | `GET /api/track?icao24={icao24}&since={ts}` | Trajectory for one aircraft |
 | `GET /api/sensors` | Receiver/sensor info (serials) |
 | `GET /api` | API discovery (welcome JSON) |
-| `GET /` | Bundled map UI |
-| `GET /config.js` | Runtime config shim (exposes `MAPBOX_TOKEN` to the SPA) |
+| `GET /docs` | Interactive OpenAPI docs (backend) |
+| `GET /` | Backend: same discovery JSON as `/api`. Frontend: the map |
+| `GET /config.js` | Runtime config shim exposing `MAPBOX_TOKEN` to the SPA (frontend only) |
 
-The REST API is self-contained — you can ignore the bundled UI and build your own
-client (mobile, monitoring system, dashboard, etc.) against `/api/*`.
+The REST API is self-contained — you can ignore the map and build your own client
+(mobile, monitoring system, dashboard, etc.) against the backend's `/api/*`.
+
+## Running on separate machines
+
+The receiver host (a Raspberry Pi next to the SDR, say) runs the backend. The frontend
+runs wherever you want to look at the map and only needs network access to the backend's
+port:
+
+```bash
+# On the receiver:
+adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+
+# On your laptop (pip install adsb-map first; MAPBOX_TOKEN in env or .env):
+adsb start frontend --api-url http://receiver.local:8000
+```
+
+The frontend reverse-proxies `/api/*` to the backend, so the browser stays same-origin and
+the backend needs no CORS configuration. If the backend is unreachable the UI reports a
+502 rather than hanging. Add `--host 0.0.0.0` to share the UI on your LAN.
+
+For UI development against a remote backend, the Vite dev server proxies the same way:
+
+```bash
+cd frontend
+ADSB_API_URL=http://receiver.local:8000 bun run dev        # or: just dev-frontend http://receiver.local:8000
+```
+
+`ADSB_API_URL` is a shell variable on the command line, not a `.env` entry. Same story for
+`bun run preview` after a build.
 
 ## Network data sources
 
@@ -101,7 +160,7 @@ The decoder connects to existing ADS-B receivers via TCP:
 - **modesdeco2**, or any Beast / raw hex feed
 
 ```bash
-adsb serve --source net --connect <host> <port> <beast|raw> --lat <lat> --lon <lon>
+adsb start backend --source net --connect <host> <port> <beast|raw> --lat <lat> --lon <lon>
 ```
 
 The network client runs in a background thread, decodes messages, updates the database,
@@ -126,19 +185,22 @@ uv run adsb download                          # one-time
 
 cp frontend/.env.example frontend/.env        # then set VITE_MAPBOX_TOKEN
 
-# Args after `dev` are passed straight through to `adsb serve`.
+# Args after `dev` are passed straight through to `adsb start backend`.
 just dev --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 ```
 
-Visit http://localhost:3000/. Vite proxies `/api/*` and `/config.js` to the backend on
-port 8000, so the frontend hits the API as if it were same-origin.
+Visit http://localhost:3000/. Vite proxies `/api/*` to the backend on port 8000 and serves
+its own `/config.js` from `VITE_MAPBOX_TOKEN`, so the dev UI behaves exactly like
+`adsb start frontend`. To run the halves separately: `just backend …` and
+`just dev-frontend [URL]` (Vite, proxying to `URL`, default `http://localhost:8000`).
 
-To exercise the production-style single-process bundle locally:
+To exercise the production-style bundled frontend locally:
 
 ```bash
 just build                                                # frontend → adsb/static/ (needs bun)
-MAPBOX_TOKEN=pk.… just serve --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
-# Visit http://localhost:8000/
+just backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+MAPBOX_TOKEN=pk.… just frontend                           # or: just frontend http://receiver:8000
+# Visit http://localhost:3000/
 ```
 
 ### Tests, linting, formatting
@@ -173,13 +235,15 @@ unzip -l dist/adsb_map-*.whl | grep adsb/static/
 |---|---|
 | `decoder.py` | pyModeS-based message decoding, CPR positions, DB enrichment |
 | `network.py` | `ADSBNetworkClient` — daemon thread reading from dump1090/readsb |
-| `api.py` | FastAPI app — `/api/*` JSON, bundled SPA at `/`, runtime `/config.js` |
+| `api.py` | Backend FastAPI app — `/api/*` JSON only |
+| `ui.py` | Frontend FastAPI app — bundled SPA, `/config.js` from `MAPBOX_TOKEN`, reverse proxy for `/api/*` |
 | `models.py` | SQLAlchemy ORM: `Aircraft`, `AircraftPosition`, `AircraftMetadata` |
 | `database.py` | Session/engine management with context-manager pattern |
 | `schemas.py` | Pydantic response models |
 | `aircraft_db.py` | Lazy-loaded singleton CSV (566k+ rows) → registration/type lookup; owns `aircraft_db_path()`, the one location both `download` and the loader use |
-| `cli.py` | Click CLI: `serve`, `download`, `init-db`, `decode`, `cleanup`, `db-size` |
-| `static/` | Built frontend assets (populated by `just build` or CI; gitignored) |
+| `status.py` | `StatusReporter` — daemon thread printing the periodic `[STATUS]` line |
+| `cli.py` | Click CLI: `start backend`, `start frontend`, `download`, `init-db`, `decode`, `cleanup`, `db-size` |
+| `static/` | Built frontend assets served by `ui.py` (populated by `just build` or CI; gitignored) |
 
 **Frontend (`frontend/src/`)** — React 18 + Vite, compiled and bundled into the wheel
 during release. End users never need a JS toolchain.
@@ -194,10 +258,10 @@ CI (`.github/workflows/publish.yml`) handles all of this on a `v*` tag push:
    declaration in `pyproject.toml`
 4. `uv publish --trusted-publishing always` ships to PyPI via OIDC (no API tokens stored)
 
-The Mapbox token is **not** baked into the wheel. At runtime, the server exposes
-`/config.js` which reads `MAPBOX_TOKEN` from its environment (process env, or a
+The Mapbox token is **not** baked into the wheel. At runtime, `adsb start frontend`
+exposes `/config.js` which reads `MAPBOX_TOKEN` from its environment (process env, or a
 `.env` file in CWD via `python-dotenv`) and writes `window.APP_CONFIG` for the SPA.
-One wheel works for any user — no rebuild per token.
+One wheel works for any user — no rebuild per token, and the backend never sees it.
 
 ## Database schema
 

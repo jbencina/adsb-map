@@ -2,66 +2,90 @@
 
 import logging
 import os
+import warnings
 
 import click
 import uvicorn
 from dotenv import find_dotenv, load_dotenv
 
 from adsb import __version__
-from adsb.aircraft_db import AIRCRAFT_DB_ENV, aircraft_db_path
-from adsb.api import create_app, frontend_is_bundled
+from adsb.aircraft_db import aircraft_db_path, set_aircraft_db_path
+from adsb.api import create_app
 from adsb.database import Database
 from adsb.decoder import ADSBDecoder
 from adsb.network import start_network_client
+from adsb.status import StatusReporter
+from adsb.ui import DEFAULT_API_URL, create_ui_app
 
 AIRCRAFT_DB_URL = "https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz"
+DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 
-def _echo_preflight(source: str, connect: tuple) -> None:
-    """Report the four things that otherwise fail silently at runtime.
+class DropNoiseFilter(logging.Filter):
+    """Drop uvicorn's warning for non-HTTP bytes on the port (HTTPS attempts, LAN probes)."""
 
-    Each of these leaves the server looking healthy while the map stays blank or
-    unenriched, so surface them once at startup instead of as buried log lines.
-    """
-    db = aircraft_db_path()
-    checks = [
-        (
-            frontend_is_bundled(),
-            "Map UI bundled",
-            "Map UI not built - API only; see `just build`",
-        ),
-        (
-            db.is_file(),
-            f"Aircraft database: {db}",
-            f"No aircraft database at {db} - run `adsb download` (or set {AIRCRAFT_DB_ENV})",
-        ),
-        (
-            bool(os.environ.get("MAPBOX_TOKEN")),
-            "Mapbox token set",
-            "MAPBOX_TOKEN unset - map tiles will not render",
-        ),
-        (
-            bool(source and connect),
-            "Data source configured",
-            "No data source - map stays empty; use --source net --connect HOST PORT TYPE",
-        ),
-    ]
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "Invalid HTTP request received" not in record.getMessage()
+
+
+def _console_handler(fmt: str) -> logging.StreamHandler:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(fmt, datefmt=DATEFMT))
+    return handler
+
+
+def _isolated_logger(name: str, fmt: str, level: int = logging.INFO) -> None:
+    """Give a logger its own console format and stop it propagating to root."""
+    log = logging.getLogger(name)
+    log.setLevel(level)
+    log.addHandler(_console_handler(fmt))
+    log.propagate = False
+
+
+def _echo_checks(checks: list[tuple[bool, str, str]]) -> None:
+    """Print (ok, message-if-ok, message-if-not) checks for things that fail silently."""
+    click.echo("Startup checks:")
     for ok, good, bad in checks:
         click.echo(f"  [{'ok' if ok else '!!'}] {good if ok else bad}")
+
+
+def aircraft_db_option(f):
+    """`--aircraft-db PATH`, applied eagerly so it is set before the command body runs."""
+
+    def _apply(ctx, param, value):
+        if value:
+            set_aircraft_db_path(value)
+
+    return click.option(
+        "--aircraft-db",
+        type=click.Path(dir_okay=False),
+        metavar="PATH",
+        is_eager=True,
+        expose_value=False,
+        callback=_apply,
+        help="Aircraft database CSV location (default: per-user data dir)",
+    )(f)
 
 
 @click.group()
 @click.version_option(version=__version__)
 def main():
     """ADS-B decoder and REST API server using pyModeS."""
-    # Load .env from the current working directory (or parents) if present.
+    # Load .env from the current working directory (or parents) if present. It is
+    # for secrets only (MAPBOX_TOKEN); everything else is a CLI argument.
     # `usecwd=True` is required: the default starts searching from the importing
     # module's location, which under pytest/CliRunner doesn't match the user's CWD.
-    # `override=False` so explicit `MAPBOX_TOKEN=… adsb serve` still beats a stale .env.
+    # `override=False` so explicit `MAPBOX_TOKEN=… adsb start backend` still beats a stale .env.
     load_dotenv(find_dotenv(usecwd=True), override=False)
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
-@main.command()
+@main.group()
+def start():
+    """Start a service: `backend` (decoder + API) or `frontend` (map UI client)."""
+
+
+@start.command()
 @click.option("--host", default="0.0.0.0", help="Host to bind the server to", show_default=True)
 @click.option("--port", default=8000, help="Port to bind the server to", show_default=True)
 @click.option(
@@ -97,8 +121,21 @@ def main():
     type=float,
     help="Receiver longitude (required for accurate position decoding)",
 )
+@click.option(
+    "--stats-interval",
+    default=10,
+    show_default=True,
+    metavar="SECONDS",
+    help="Print a feed/decoding status line this often (0 to disable)",
+)
+@click.option(
+    "--access-log",
+    is_flag=True,
+    help="Log every HTTP request (noisy: the map polls /api/all every second)",
+)
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development")
-def serve(
+@aircraft_db_option
+def backend(
     host: str,
     port: int,
     db_path: str,
@@ -107,71 +144,50 @@ def serve(
     stale_timeout: int,
     lat: float,
     lon: float,
+    stats_interval: int,
+    access_log: bool,
     reload: bool,
 ):
     """
-    Start the ADS-B API server.
+    Start the decoder and REST API.
+
+    The map UI is a separate service: run `adsb start frontend` (on this or
+    any other machine) and point it here with --api-url.
 
     Examples:
 
-        # Start server with default settings
-        adsb serve
+        # Start with default settings
+        adsb start backend
 
-        # Start server with custom database path
-        adsb serve --db-path /path/to/adsb.db
+        # Custom database path
+        adsb start backend --db-path /path/to/adsb.db
 
-        # Start server with network data source
-        adsb serve --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+        # With a network data source
+        adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
     """
-    # Suppress deprecation warnings from dependencies
-    import warnings
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.addHandler(_console_handler("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+    _isolated_logger("adsb.data", "%(asctime)s - [ADSB] %(levelname)s - %(message)s")
+    _isolated_logger("adsb.status", "%(asctime)s - [STATUS] %(message)s")
+    logging.getLogger("adsb.decoder").setLevel(logging.WARNING)  # per-aircraft chatter
 
-    warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-    # Configure logging with different formats for different loggers
-    # Root logger configuration
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-
-    # Create console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-
-    # Default formatter for other loggers
-    default_formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-    )
-
-    console_handler.setFormatter(default_formatter)
-    root_logger.addHandler(console_handler)
-
-    # Configure ADSB data logger separately
-    adsb_formatter = logging.Formatter(
-        "%(asctime)s - [ADSB] %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    adsb_logger = logging.getLogger("adsb.data")
-    adsb_logger.setLevel(logging.INFO)
-    adsb_handler = logging.StreamHandler()
-    adsb_handler.setFormatter(adsb_formatter)
-    adsb_logger.addHandler(adsb_handler)
-    adsb_logger.propagate = False  # Don't propagate to root logger
-
-    # Set decoder logger to WARNING to reduce noise (individual aircraft updates)
-    logging.getLogger("adsb.decoder").setLevel(logging.WARNING)
-
-    # Custom uvicorn log config to add [API] prefix to access logs
+    # uvicorn configures its own loggers; give access logs an [API] prefix.
     log_config = {
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": {
             "api": {
                 "format": "%(asctime)s - [API] %(levelname)s - %(message)s",
-                "datefmt": "%Y-%m-%d %H:%M:%S",
+                "datefmt": DATEFMT,
             },
             "default": {
                 "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                "datefmt": "%Y-%m-%d %H:%M:%S",
+                "datefmt": DATEFMT,
             },
+        },
+        "filters": {
+            "drop_noise": {"()": "adsb.cli.DropNoiseFilter"},
         },
         "handlers": {
             "api": {
@@ -183,17 +199,18 @@ def serve(
                 "formatter": "default",
                 "class": "logging.StreamHandler",
                 "stream": "ext://sys.stdout",
+                "filters": ["drop_noise"],
             },
         },
         "loggers": {
             "uvicorn.access": {
                 "handlers": ["api"],
-                "level": "INFO",
+                "level": "INFO" if access_log else "WARNING",
                 "propagate": False,
             },
             "uvicorn.error": {
                 "handlers": ["default"],
-                "level": "WARNING",  # Only show warnings/errors, not startup messages
+                "level": "WARNING",  # hide uvicorn's own startup banner
                 "propagate": False,
             },
         },
@@ -235,13 +252,90 @@ def serve(
     # Create FastAPI app with network client for graceful shutdown
     app = create_app(database, network_client)
 
-    click.echo("Startup checks:")
-    _echo_preflight(source, connect)
+    db = aircraft_db_path()
+    _echo_checks(
+        [
+            (
+                db.is_file(),
+                f"Aircraft database: {db}",
+                f"No aircraft database at {db} - run `adsb download` (or pass --aircraft-db)",
+            ),
+            (
+                bool(source and connect),
+                "Data source configured",
+                "No data source - map stays empty; use --source net --connect HOST PORT TYPE",
+            ),
+        ]
+    )
 
-    # Start server
-    # Note: Uvicorn handles signals and will trigger FastAPI lifespan shutdown
+    reporter = None
+    if stats_interval > 0:
+        reporter = StatusReporter(database, network_client, interval=stats_interval).start()
+
+    # uvicorn handles signals and triggers the FastAPI lifespan shutdown.
     click.echo(f"Starting API server on http://{host}:{port}/")
-    uvicorn.run(app, host=host, port=port, reload=reload, log_config=log_config)
+    try:
+        uvicorn.run(app, host=host, port=port, reload=reload, log_config=log_config)
+    finally:
+        if reporter:
+            reporter.stop()
+
+
+@start.command()
+@click.option(
+    "--api-url",
+    default=DEFAULT_API_URL,
+    show_default=True,
+    metavar="URL",
+    help="Base URL of the `adsb start backend` to display, e.g. http://receiver.local:8000",
+)
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    help="Host to bind to (use 0.0.0.0 to share on the LAN)",
+    show_default=True,
+)
+@click.option("--port", default=3000, help="Port to bind to", show_default=True)
+def frontend(api_url: str, host: str, port: int):
+    """
+    Start the map UI.
+
+    Serves the bundled map and proxies /api/* to the backend given by
+    --api-url (same machine by default), so the browser stays same-origin and
+    the backend needs no CORS configuration. Needs MAPBOX_TOKEN in this
+    process's environment or a .env file in the working directory.
+
+    Examples:
+
+        # Backend on this machine
+        adsb start frontend
+
+        # Backend on the receiver
+        adsb start frontend --api-url http://receiver.local:8000
+    """
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s - [UI] %(levelname)s - %(message)s",
+        datefmt=DATEFMT,
+    )
+
+    try:
+        app = create_ui_app(api_url)
+    except (RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    click.echo(f"Backend API: {app.state.api_url}")
+    _echo_checks(
+        [
+            (
+                bool(os.environ.get("MAPBOX_TOKEN")),
+                "Mapbox token set",
+                "MAPBOX_TOKEN unset - map tiles will not render",
+            ),
+        ]
+    )
+    click.echo(f"Starting map UI on http://{host}:{port}/")
+    uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
 @main.command()
@@ -270,6 +364,7 @@ def init_db(db_path: str):
     help="Path to SQLite database file",
     show_default=True,
 )
+@aircraft_db_option
 def decode(message: str, db_path: str):
     """
     Decode a single ADS-B message and store it in the database.
@@ -378,6 +473,7 @@ def db_size(db_path: str):
 
 @main.command()
 @click.option("--force", is_flag=True, help="Re-download even if the database is already present")
+@aircraft_db_option
 def download(force: bool):
     """
     Download the aircraft database from tar1090-db.
@@ -387,7 +483,8 @@ def download(force: bool):
     aircraft registration, type code, and descriptions.
 
     Stored in a per-user data directory so it is found no matter which
-    directory `adsb serve` runs from. Override with ADSB_AIRCRAFT_DB.
+    directory `adsb start backend` runs from. Override with --aircraft-db (pass the
+    same path to `adsb start backend`).
 
     Example:
 
@@ -396,8 +493,6 @@ def download(force: bool):
     import gzip
     import shutil
     from urllib.request import Request, urlopen
-
-    from adsb.aircraft_db import aircraft_db_path
 
     dest = aircraft_db_path()
     if dest.is_file() and not force:

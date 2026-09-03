@@ -6,15 +6,28 @@ to enrich aircraft data with registration, type code, and manufacturer informati
 
 import csv
 import logging
-import os
 from pathlib import Path
 
 from platformdirs import user_data_dir
 
 logger = logging.getLogger(__name__)
 
-#: Environment variable overriding the aircraft database location.
-AIRCRAFT_DB_ENV = "ADSB_AIRCRAFT_DB"
+#: Location set by `--aircraft-db` on the CLI; None means the per-user default.
+_configured_path: Path | None = None
+
+
+def set_aircraft_db_path(path: str | Path | None) -> None:
+    """Override the aircraft CSV location for this process.
+
+    Called by the CLI when `--aircraft-db` is given, before anything loads the
+    database. Configuration is deliberately a CLI argument rather than an
+    environment variable: `.env` is reserved for secrets such as `MAPBOX_TOKEN`.
+
+    Args:
+        path: New location, or None to restore the per-user default.
+    """
+    global _configured_path
+    _configured_path = Path(path) if path else None
 
 
 def aircraft_db_path() -> Path:
@@ -27,10 +40,10 @@ def aircraft_db_path() -> Path:
     since nothing ever wrote to `site-packages/data/`.
 
     Returns:
-        Path to `aircraft.csv`, overridable via the `ADSB_AIRCRAFT_DB` env var.
+        Path to `aircraft.csv`, overridable via `set_aircraft_db_path()`
+        (the CLI's `--aircraft-db` option).
     """
-    override = os.environ.get(AIRCRAFT_DB_ENV)
-    return Path(override) if override else Path(user_data_dir("adsb-map")) / "aircraft.csv"
+    return _configured_path or Path(user_data_dir("adsb-map")) / "aircraft.csv"
 
 
 class AircraftDatabase:

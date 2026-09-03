@@ -235,80 +235,6 @@ def test_database_session_rollback_on_exception(test_db):
         assert count >= 0  # Should work
 
 
-def test_cors_origins_in_dev_mode(test_db, monkeypatch):
-    """CORS middleware is registered when frontend is not bundled (dev mode)."""
-    import adsb.api
-
-    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: False)
-    app = create_app(test_db)
-    client = TestClient(app)
-
-    response = client.get("/api", headers={"Origin": "http://localhost:5173"})
-    assert response.status_code == 200
-    assert "access-control-allow-origin" in response.headers
-
-
-def test_spa_fallback_when_bundled(test_db, monkeypatch, tmp_path):
-    """When adsb/static/index.html exists, GET / serves the SPA and /api/foo returns 404."""
-    import adsb.api
-
-    static_dir = tmp_path / "static"
-    (static_dir / "assets").mkdir(parents=True)
-    (static_dir / "index.html").write_text("<html>spa</html>")
-
-    monkeypatch.setattr(adsb.api, "STATIC_DIR", static_dir)
-    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: True)
-
-    app = create_app(test_db)
-    client = TestClient(app)
-
-    spa = client.get("/")
-    assert spa.status_code == 200
-    assert "spa" in spa.text
-
-    assert client.get("/api/nonexistent").status_code == 404
-
-
-def test_config_js_available_in_dev_mode(test_db, monkeypatch):
-    """/config.js is registered even when the frontend is not bundled, so the Vite
-    proxy in dev doesn't 404 and the SPA's <script src='/config.js'> always works."""
-    import adsb.api
-
-    monkeypatch.setenv("MAPBOX_TOKEN", "pk.test_token_value")
-    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: False)
-
-    app = create_app(test_db)
-    client = TestClient(app)
-
-    response = client.get("/config.js")
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/javascript")
-    assert "window.APP_CONFIG" in response.text
-    assert "pk.test_token_value" in response.text
-
-
-def test_config_js_available_in_bundled_mode(test_db, monkeypatch, tmp_path):
-    """/config.js works in bundled mode and reads MAPBOX_TOKEN from the environment."""
-    import adsb.api
-
-    static_dir = tmp_path / "static"
-    (static_dir / "assets").mkdir(parents=True)
-    (static_dir / "index.html").write_text("<html>spa</html>")
-
-    monkeypatch.setenv("MAPBOX_TOKEN", "pk.bundled_token")
-    monkeypatch.setattr(adsb.api, "STATIC_DIR", static_dir)
-    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: True)
-
-    app = create_app(test_db)
-    client = TestClient(app)
-
-    response = client.get("/config.js")
-    assert response.status_code == 200
-    assert "pk.bundled_token" in response.text
-
-    assert client.get("/api/nonexistent").status_code == 404
-
-
 def test_max_metadata_records_constant(test_db):
     """Test that MAX_METADATA_RECORDS constant is used."""
     from adsb.api import MAX_METADATA_RECORDS
@@ -336,19 +262,20 @@ def test_api_endpoints_exist(test_db, endpoint, expected_status):
     assert response.status_code == expected_status
 
 
-def test_frontend_missing_page_when_not_bundled(test_db, monkeypatch):
-    """An unbuilt frontend serves an explanatory 503 at / instead of a bare 404."""
-    import adsb.api
+def test_backend_root_is_api_index(client):
+    """The backend has no UI, so / explains the API instead of 404ing."""
+    root = client.get("/")
+    assert root.status_code == 200
+    assert root.json() == client.get("/api").json()
+    assert "/api/all" in root.json()["routes"]
+    assert "adsb start frontend" in root.json()["map_ui"]
 
-    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: False)
-    app = create_app(test_db)
-    client = TestClient(app)
-
-    response = client.get("/")
-    assert response.status_code == 503
-    assert response.headers["content-type"].startswith("text/html")
-    assert "just build" in response.text
-
-    # The API must stay honest rather than being shadowed by the help page.
-    assert client.get("/api").status_code == 200
+    assert client.get("/config.js").status_code == 404
     assert client.get("/api/nonexistent").status_code == 404
+
+
+def test_backend_has_no_cors(client):
+    """Browsers reach the API through `adsb start frontend`'s proxy, never directly."""
+    response = client.get("/api", headers={"Origin": "http://localhost:3000"})
+    assert response.status_code == 200
+    assert "access-control-allow-origin" not in response.headers

@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,6 +21,17 @@ from adsb.schemas import AircraftStateSchema, SensorSchema, TrackPointSchema
 # Constants
 MAX_METADATA_RECORDS = 4  # Match jet1090 API format - last 4 reception metadata
 STATIC_DIR = Path(__file__).parent / "static"
+
+#: Origins the Vite dev server (`bun run dev` / `bun run preview`) is reachable at.
+#: Allowed automatically whenever this process is not serving the UI itself.
+DEV_CORS_ORIGINS = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
 
 # Global instances
 db_instance: Database | None = None
@@ -88,12 +100,77 @@ FRONTEND_MISSING_HTML = """<!doctype html>
 """
 
 
-def frontend_is_bundled() -> bool:
+def frontend_is_bundled(static_dir: Path | None = None) -> bool:
     """Return True when the built frontend has been staged into the package."""
-    return STATIC_DIR.is_dir() and (STATIC_DIR / "index.html").is_file()
+    static_dir = STATIC_DIR if static_dir is None else static_dir
+    return static_dir.is_dir() and (static_dir / "index.html").is_file()
 
 
-def create_app(database: Database, network_client=None) -> FastAPI:
+def parse_cors_origins(value: str | Iterable[str] | None) -> list[str]:
+    """
+    Normalise a CORS origin list from CLI/env input.
+
+    Accepts a comma- or whitespace-separated string (the ``--cors-origins`` /
+    ``ADSB_CORS_ORIGINS`` form) or an iterable of origins. Trailing slashes are
+    stripped because browsers send ``Origin`` without one, and Starlette matches
+    the header verbatim.
+
+    Parameters
+    ----------
+    value : str or iterable of str or None
+        Raw origin specification
+
+    Returns
+    -------
+    list[str]
+        De-duplicated origins in input order; ``["*"]`` if any entry is ``*``
+    """
+    if value is None:
+        return []
+    parts = value.replace(",", " ").split() if isinstance(value, str) else list(value)
+    origins: list[str] = []
+    for part in parts:
+        origin = part.strip().rstrip("/")
+        if origin and origin not in origins:
+            origins.append(origin)
+    return ["*"] if "*" in origins else origins
+
+
+def mount_spa(app: FastAPI, static_dir: Path) -> None:
+    """
+    Serve the built frontend from ``static_dir`` with an SPA fallback.
+
+    Any path not already claimed by a registered route serves ``index.html`` so
+    client-side routing works. Unmatched ``/api/*`` paths return 404 instead of
+    leaking the SPA shell. Must be called after all API routes are registered.
+
+    Parameters
+    ----------
+    app : FastAPI
+        Application to mount onto
+    static_dir : Path
+        Directory containing ``index.html`` and ``assets/``
+    """
+    app.mount(
+        "/assets",
+        StaticFiles(directory=static_dir / "assets"),
+        name="assets",
+    )
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        if full_path.startswith("api/") or full_path == "api":
+            raise HTTPException(status_code=404)
+        return FileResponse(static_dir / "index.html")
+
+
+def create_app(
+    database: Database,
+    network_client=None,
+    *,
+    serve_ui: bool = True,
+    cors_origins: Iterable[str] | None = None,
+) -> FastAPI:
     """
     Create and configure FastAPI application.
 
@@ -103,6 +180,14 @@ def create_app(database: Database, network_client=None) -> FastAPI:
         Database instance
     network_client : ADSBNetworkClient, optional
         Network client instance for graceful shutdown
+    serve_ui : bool, optional
+        Serve the bundled map UI at ``/`` when it is available. Pass ``False``
+        to run API-only (the UI is hosted elsewhere, e.g. via ``adsb ui``).
+    cors_origins : iterable of str, optional
+        Extra browser origins allowed to call ``/api/*`` cross-origin. Use
+        ``["*"]`` to allow any origin. Needed when the UI is served from a
+        different host/port than this API and does not proxy through
+        ``adsb ui`` or the Vite dev server.
 
     Returns
     -------
@@ -129,19 +214,20 @@ def create_app(database: Database, network_client=None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS is only required when the frontend runs as a separate dev server.
-    # In a bundled wheel the frontend is served same-origin from this app.
-    if not frontend_is_bundled():
+    ui_enabled = serve_ui and frontend_is_bundled()
+
+    # Same-origin serving needs no CORS. Whenever the UI lives elsewhere (dev
+    # server, `adsb ui` on another machine, static hosting), allow the local dev
+    # origins automatically plus whatever the operator configured explicitly.
+    origins = parse_cors_origins(cors_origins)
+    if not ui_enabled and origins != ["*"]:
+        origins = parse_cors_origins([*origins, *DEV_CORS_ORIGINS])
+    if origins:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=[
-                "http://localhost:3000",
-                "http://127.0.0.1:3000",
-                "http://localhost:5173",
-                "http://127.0.0.1:5173",
-            ],
+            allow_origins=origins,
             allow_credentials=False,
-            allow_methods=["*"],
+            allow_methods=["GET"],
             allow_headers=["*"],
         )
 
@@ -334,21 +420,9 @@ def create_app(database: Database, network_client=None) -> FastAPI:
             media_type="application/javascript",
         )
 
-    if frontend_is_bundled():
-        app.mount(
-            "/assets",
-            StaticFiles(directory=STATIC_DIR / "assets"),
-            name="assets",
-        )
-
-        # SPA fallback: any non-API path serves index.html so client-side routing works.
-        # Unmatched /api/* paths return 404 instead of leaking the SPA shell.
-        @app.get("/{full_path:path}", include_in_schema=False)
-        async def spa_fallback(full_path: str):
-            if full_path.startswith("api/") or full_path == "api":
-                raise HTTPException(status_code=404)
-            return FileResponse(STATIC_DIR / "index.html")
-    else:
+    if ui_enabled:
+        mount_spa(app, STATIC_DIR)
+    elif serve_ui:
         logging.getLogger("adsb").warning(FRONTEND_MISSING_HELP)
 
         # Only `/` is claimed, so unmatched API paths keep returning an honest 404.

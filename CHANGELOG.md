@@ -19,11 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explanatory 503 page, and the accompanying log line is a warning rather than info.
 
 ### Added
-- `adsb serve` prints startup checks for the four conditions that otherwise fail
-  silently: frontend bundled, aircraft database present, `MAPBOX_TOKEN` set, and data
-  source configured.
-- `ADSB_AIRCRAFT_DB` environment variable overrides the aircraft database location
-  (honoured from `.env` like `MAPBOX_TOKEN`).
+- **Backend and frontend can run on different machines.**
+  - `adsb ui --api-url http://receiver:8000` serves the bundled map on the client and
+    reverse-proxies `/api/*` and `/config.js` to the backend, so the browser stays
+    same-origin and the backend needs no CORS configuration. A local `MAPBOX_TOKEN`
+    overrides the backend's; the backend being down surfaces as a 502/504 JSON error.
+  - `adsb serve --no-ui` runs API-only; `adsb serve --cors-origins a,b` (or `*`) allows
+    browsers on other origins to call `/api/*` directly, for statically hosted builds.
+  - `ADSB_API_URL=http://receiver:8000 bun run dev` (or `just dev-frontend URL`) points
+    the Vite dev/preview proxy at a remote backend. New `just dev-backend`, `just
+    dev-frontend`, `just ui` recipes.
+  - `frontend/config.example.js` documents the runtime `config.js` for static hosting;
+    releases attach `adsb-map-ui-vX.Y.Z.zip` containing the built UI plus that template.
+- `adsb serve` prints startup checks for the conditions that otherwise fail silently:
+  frontend bundled (or `--no-ui`), aircraft database present, `MAPBOX_TOKEN` set, data
+  source configured, and any CORS origins in effect.
+- `--aircraft-db PATH` on `adsb serve`, `adsb download` and `adsb decode` overrides the
+  aircraft database location.
 - `just bootstrap` installs bun; `just build` now fails with an actionable message when
   bun is missing instead of a bare "command not found".
 - `adsb download --force`; without it the command is a no-op when the database is
@@ -33,8 +45,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `adsb download` streams the gzip straight to CSV via a `.partial` temp file, so no
   `aircraft.csv.gz` is left on disk and a failed download cannot leave a truncated CSV
   where the loader would read it.
-- **Breaking:** `adsb download --data-dir` is removed; use `ADSB_AIRCRAFT_DB` instead.
-  Single supported location, single override mechanism.
+- **Breaking:** `adsb download --data-dir` is removed; use `--aircraft-db PATH` instead
+  (same flag on `serve` and `decode`). Single supported location, single override
+  mechanism.
+- `.env` is for secrets only (`MAPBOX_TOKEN`); every other setting is a CLI argument.
+  Configuration is never read from `ADSB_*` environment variables.
+- CORS: previously enabled with fixed localhost origins only when the frontend was not
+  bundled. Now the dev-server origins are allowed whenever this process is not serving
+  the UI (not bundled or `--no-ui`), operator-supplied `--cors-origins` are always
+  honoured, and only `GET` is allowed.
+- `adsb.api.create_app` gains keyword-only `serve_ui` and `cors_origins`;
+  `frontend_is_bundled` accepts an optional directory; new `mount_spa` and
+  `parse_cors_origins` helpers.
+- `httpx` is now a runtime dependency (used by the `adsb ui` proxy).
 - **Breaking:** `AircraftDatabase` no longer auto-extracts a sibling `aircraft.csv.gz`;
   `adsb download` is the one supported way to obtain the database.
 - `adsb.api._frontend_is_bundled` is now public `frontend_is_bundled` (used by the CLI

@@ -12,6 +12,22 @@ dev *ARGS:
     (cd frontend && bun run dev) &
     wait
 
+# Run only the backend, API-only (no bundled UI). Pair with `just dev-frontend` or
+# `adsb ui` on another machine.
+# Example: just dev-backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+dev-backend *ARGS:
+    uv run adsb serve --no-ui {{ARGS}}
+
+# Run only the Vite dev server, proxying /api/* to a backend (local or remote).
+# Example: just dev-frontend http://receiver.local:8000
+dev-frontend API_URL="http://localhost:8000":
+    cd frontend && ADSB_API_URL={{API_URL}} bun run dev
+
+# Serve the bundled map UI as a client of a remote backend (run `just build` first).
+# Example: just ui http://receiver.local:8000 --host 0.0.0.0
+ui API_URL *ARGS:
+    uv run adsb ui --api-url {{API_URL}} {{ARGS}}
+
 # Install the frontend toolchain. Run once on a fresh checkout.
 bootstrap:
     #!/usr/bin/env bash

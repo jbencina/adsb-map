@@ -352,3 +352,90 @@ def test_frontend_missing_page_when_not_bundled(test_db, monkeypatch):
     # The API must stay honest rather than being shadowed by the help page.
     assert client.get("/api").status_code == 200
     assert client.get("/api/nonexistent").status_code == 404
+
+
+def test_api_only_mode_skips_ui_even_when_bundled(test_db, monkeypatch, tmp_path):
+    """serve_ui=False never serves the SPA or the not-built help page."""
+    import adsb.api
+
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html>spa</html>")
+    monkeypatch.setattr(adsb.api, "STATIC_DIR", static_dir)
+    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: True)
+
+    app = create_app(test_db, serve_ui=False)
+    client = TestClient(app)
+
+    assert client.get("/").status_code == 404
+    assert client.get("/assets/anything.js").status_code == 404
+    assert client.get("/api").status_code == 200
+    # /config.js stays so a proxying UI can fetch the Mapbox token from here.
+    assert client.get("/config.js").status_code == 200
+
+
+def test_api_only_mode_allows_dev_origins(test_db, monkeypatch):
+    """With the UI elsewhere, the local dev-server origins work out of the box."""
+    import adsb.api
+
+    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: True)
+    client = TestClient(create_app(test_db, serve_ui=False))
+
+    allowed = client.get("/api", headers={"Origin": "http://localhost:3000"})
+    assert allowed.headers.get("access-control-allow-origin") == "http://localhost:3000"
+
+    denied = client.get("/api", headers={"Origin": "http://evil.example"})
+    assert "access-control-allow-origin" not in denied.headers
+
+
+def test_no_cors_when_ui_served_same_origin(test_db, monkeypatch):
+    """Bundled + serving the UI: nothing cross-origin is allowed by default."""
+    import adsb.api
+
+    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: True)
+    client = TestClient(create_app(test_db))
+
+    response = client.get("/api", headers={"Origin": "http://localhost:3000"})
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_explicit_cors_origins(test_db, monkeypatch):
+    """Operator-supplied origins are honoured regardless of UI mode."""
+    import adsb.api
+
+    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: True)
+    client = TestClient(create_app(test_db, cors_origins=["https://maps.example.com/"]))
+
+    allowed = client.get("/api", headers={"Origin": "https://maps.example.com"})
+    assert allowed.headers.get("access-control-allow-origin") == "https://maps.example.com"
+
+    denied = client.get("/api", headers={"Origin": "https://other.example.com"})
+    assert "access-control-allow-origin" not in denied.headers
+
+
+def test_cors_wildcard(test_db, monkeypatch):
+    import adsb.api
+
+    monkeypatch.setattr(adsb.api, "frontend_is_bundled", lambda: False)
+    client = TestClient(create_app(test_db, cors_origins="*"))
+
+    response = client.get("/api", headers={"Origin": "https://anywhere.example"})
+    assert response.headers.get("access-control-allow-origin") == "*"
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (None, []),
+        ("", []),
+        ("http://a:3000", ["http://a:3000"]),
+        ("http://a:3000,http://b:3000/", ["http://a:3000", "http://b:3000"]),
+        ("http://a:3000, http://b:3000  http://a:3000", ["http://a:3000", "http://b:3000"]),
+        ("http://a:3000,*", ["*"]),
+        (["http://a", "http://a/"], ["http://a"]),
+    ],
+)
+def test_parse_cors_origins(raw, expected):
+    from adsb.api import parse_cors_origins
+
+    assert parse_cors_origins(raw) == expected

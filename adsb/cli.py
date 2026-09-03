@@ -8,32 +8,37 @@ import uvicorn
 from dotenv import find_dotenv, load_dotenv
 
 from adsb import __version__
-from adsb.aircraft_db import AIRCRAFT_DB_ENV, aircraft_db_path
-from adsb.api import create_app, frontend_is_bundled
+from adsb.aircraft_db import aircraft_db_path, set_aircraft_db_path
+from adsb.api import create_app, frontend_is_bundled, parse_cors_origins
 from adsb.database import Database
 from adsb.decoder import ADSBDecoder
 from adsb.network import start_network_client
+from adsb.ui import create_ui_app
 
 AIRCRAFT_DB_URL = "https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz"
 
 
-def _echo_preflight(source: str, connect: tuple) -> None:
-    """Report the four things that otherwise fail silently at runtime.
+def _echo_preflight(source: str, connect: tuple, serve_ui: bool, cors_origins: list) -> None:
+    """Report the things that otherwise fail silently at runtime.
 
     Each of these leaves the server looking healthy while the map stays blank or
     unenriched, so surface them once at startup instead of as buried log lines.
     """
     db = aircraft_db_path()
-    checks = [
-        (
+    if serve_ui:
+        ui_check = (
             frontend_is_bundled(),
             "Map UI bundled",
             "Map UI not built - API only; see `just build`",
-        ),
+        )
+    else:
+        ui_check = (True, "Map UI disabled (--no-ui) - API only", "")
+    checks = [
+        ui_check,
         (
             db.is_file(),
             f"Aircraft database: {db}",
-            f"No aircraft database at {db} - run `adsb download` (or set {AIRCRAFT_DB_ENV})",
+            f"No aircraft database at {db} - run `adsb download` (or pass --aircraft-db)",
         ),
         (
             bool(os.environ.get("MAPBOX_TOKEN")),
@@ -46,15 +51,41 @@ def _echo_preflight(source: str, connect: tuple) -> None:
             "No data source - map stays empty; use --source net --connect HOST PORT TYPE",
         ),
     ]
+    if cors_origins:
+        checks.append((True, f"CORS origins: {', '.join(cors_origins)}", ""))
     for ok, good, bad in checks:
         click.echo(f"  [{'ok' if ok else '!!'}] {good if ok else bad}")
+
+
+def aircraft_db_option(f):
+    """`--aircraft-db PATH` for every command that reads or writes the aircraft CSV.
+
+    Applied eagerly (`is_eager`) so the override is installed before the command
+    body -- and anything it imports lazily -- resolves the path.
+    """
+
+    def _apply(ctx, param, value):
+        if value:
+            set_aircraft_db_path(value)
+        return value
+
+    return click.option(
+        "--aircraft-db",
+        type=click.Path(dir_okay=False, path_type=str),
+        metavar="PATH",
+        is_eager=True,
+        expose_value=False,
+        callback=_apply,
+        help="Aircraft database CSV location (default: per-user data dir)",
+    )(f)
 
 
 @click.group()
 @click.version_option(version=__version__)
 def main():
     """ADS-B decoder and REST API server using pyModeS."""
-    # Load .env from the current working directory (or parents) if present.
+    # Load .env from the current working directory (or parents) if present. It is
+    # for secrets only (MAPBOX_TOKEN); everything else is a CLI argument.
     # `usecwd=True` is required: the default starts searching from the importing
     # module's location, which under pytest/CliRunner doesn't match the user's CWD.
     # `override=False` so explicit `MAPBOX_TOKEN=… adsb serve` still beats a stale .env.
@@ -97,7 +128,22 @@ def main():
     type=float,
     help="Receiver longitude (required for accurate position decoding)",
 )
+@click.option(
+    "--no-ui",
+    is_flag=True,
+    help="Serve the REST API only; do not serve the bundled map UI at /",
+)
+@click.option(
+    "--cors-origins",
+    metavar="ORIGINS",
+    help=(
+        "Comma-separated browser origins allowed to call /api/* cross-origin, "
+        "e.g. http://laptop:3000 or '*'. Only needed when the UI is hosted elsewhere "
+        "and talks to this API directly (not via `adsb ui`, which proxies)."
+    ),
+)
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development")
+@aircraft_db_option
 def serve(
     host: str,
     port: int,
@@ -107,6 +153,8 @@ def serve(
     stale_timeout: int,
     lat: float,
     lon: float,
+    no_ui: bool,
+    cors_origins: str | None,
     reload: bool,
 ):
     """
@@ -122,6 +170,9 @@ def serve(
 
         # Start server with network data source
         adsb serve --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+
+        # API only; run the map elsewhere with `adsb ui --api-url http://this-host:8000`
+        adsb serve --no-ui --source net --connect localhost 30005 beast
     """
     # Suppress deprecation warnings from dependencies
     import warnings
@@ -233,15 +284,64 @@ def serve(
         click.echo("Network decoder started successfully")
 
     # Create FastAPI app with network client for graceful shutdown
-    app = create_app(database, network_client)
+    origins = parse_cors_origins(cors_origins)
+    app = create_app(database, network_client, serve_ui=not no_ui, cors_origins=origins)
 
     click.echo("Startup checks:")
-    _echo_preflight(source, connect)
+    _echo_preflight(source, connect, serve_ui=not no_ui, cors_origins=origins)
 
     # Start server
     # Note: Uvicorn handles signals and will trigger FastAPI lifespan shutdown
     click.echo(f"Starting API server on http://{host}:{port}/")
     uvicorn.run(app, host=host, port=port, reload=reload, log_config=log_config)
+
+
+@main.command()
+@click.option(
+    "--api-url",
+    required=True,
+    metavar="URL",
+    help="Base URL of the `adsb serve` backend, e.g. http://receiver.local:8000",
+)
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    help="Host to bind to (use 0.0.0.0 to share on the LAN)",
+    show_default=True,
+)
+@click.option("--port", default=3000, help="Port to bind to", show_default=True)
+def ui(api_url: str, host: str, port: int):
+    """
+    Serve the map UI as a client of a remote ADS-B API.
+
+    Runs the bundled map on this machine and proxies /api/* to the backend
+    given by --api-url, so the receiver host only needs `adsb serve` and no
+    CORS configuration. The Mapbox token comes from the backend unless
+    MAPBOX_TOKEN is set here.
+
+    Example:
+
+        adsb ui --api-url http://receiver.local:8000
+    """
+    import warnings
+
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s - [UI] %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    try:
+        app = create_ui_app(api_url)
+    except (RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    click.echo(f"Backend API: {app.state.api_url}")
+    token_source = "local MAPBOX_TOKEN" if os.environ.get("MAPBOX_TOKEN") else "backend"
+    click.echo(f"Mapbox token: from {token_source}")
+    click.echo(f"Starting map UI on http://{host}:{port}/")
+    uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
 @main.command()
@@ -270,6 +370,7 @@ def init_db(db_path: str):
     help="Path to SQLite database file",
     show_default=True,
 )
+@aircraft_db_option
 def decode(message: str, db_path: str):
     """
     Decode a single ADS-B message and store it in the database.
@@ -378,6 +479,7 @@ def db_size(db_path: str):
 
 @main.command()
 @click.option("--force", is_flag=True, help="Re-download even if the database is already present")
+@aircraft_db_option
 def download(force: bool):
     """
     Download the aircraft database from tar1090-db.
@@ -387,7 +489,8 @@ def download(force: bool):
     aircraft registration, type code, and descriptions.
 
     Stored in a per-user data directory so it is found no matter which
-    directory `adsb serve` runs from. Override with ADSB_AIRCRAFT_DB.
+    directory `adsb serve` runs from. Override with --aircraft-db (pass the
+    same path to `adsb serve`).
 
     Example:
 
@@ -396,8 +499,6 @@ def download(force: bool):
     import gzip
     import shutil
     from urllib.request import Request, urlopen
-
-    from adsb.aircraft_db import aircraft_db_path
 
     dest = aircraft_db_path()
     if dest.is_file() and not force:

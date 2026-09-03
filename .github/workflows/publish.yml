@@ -44,6 +44,15 @@ jobs:
           find adsb/static -mindepth 1 ! -name .gitkeep -delete
           cp -r frontend/dist/. adsb/static/
 
+      # Standalone UI bundle for static hosting (nginx, S3, GitHub Pages) against a
+      # remote `adsb serve --cors-origins ...`. Ships config.example.js alongside;
+      # deployers copy it to config.js and fill in apiUrl / mapboxToken.
+      - name: Package standalone UI
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          cp frontend/config.example.js frontend/dist/
+          (cd frontend/dist && zip -qr "../../adsb-map-ui-${TAG}.zip" .)
+
       - name: Set up uv
         # setup-uv does not publish a floating major tag; pin to a specific version.
         uses: astral-sh/setup-uv@v8.1.0
@@ -77,10 +86,10 @@ jobs:
             gh release create "$TAG" \
               --title "$TAG" \
               --notes "${{ steps.notes.outputs.notes }}" \
-              dist/*.whl dist/*.tar.gz
+              dist/*.whl dist/*.tar.gz adsb-map-ui-*.zip
           else
             gh release create "$TAG" \
               --title "$TAG" \
               --generate-notes \
-              dist/*.whl dist/*.tar.gz
+              dist/*.whl dist/*.tar.gz adsb-map-ui-*.zip
           fi

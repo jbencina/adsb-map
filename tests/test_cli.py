@@ -169,6 +169,18 @@ def test_frontend_defaults_to_local_backend(tmp_path, monkeypatch, built_fronten
     assert "[ok] Mapbox token set" in result.output
 
 
+def test_frontend_demo_mode(tmp_path, monkeypatch, built_frontend, no_uvicorn):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MAPBOX_TOKEN", "pk.local")
+
+    result = CliRunner().invoke(main, ["start", "frontend", "--demo"])
+
+    assert result.exit_code == 0, result.output
+    assert no_uvicorn["app"].state.demo is True
+    assert "Demo mode" in result.output
+    assert "Backend API" not in result.output
+
+
 def test_backend_is_api_only(tmp_path, monkeypatch, no_uvicorn):
     """The backend never serves the UI and has no flag about it."""
     monkeypatch.chdir(tmp_path)

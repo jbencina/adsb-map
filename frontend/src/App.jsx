@@ -6,6 +6,7 @@ import { useFilteredAircraft } from './hooks/useFilteredAircraft'
 import { useTheme } from './hooks/useTheme'
 import {
   MAPBOX_TOKEN,
+  DEMO_MODE,
   DEFAULT_REFRESH_INTERVAL,
   DEFAULT_MAX_AGE_MINUTES,
   REFRESH_INTERVAL_MIN,
@@ -80,6 +81,11 @@ function App() {
               {error && (
                 <span className="error" role="alert" aria-label={`Error: ${error}`}>
                   Error: {error}
+                </span>
+              )}
+              {DEMO_MODE && (
+                <span className="demo-badge" title="Simulated aircraft; no backend connected">
+                  Demo data
                 </span>
               )}
             </>

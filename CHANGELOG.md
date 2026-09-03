@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step. `adsb start frontend` now refuses to start with an explanatory error.
 
 ### Added
+- **Demo mode.** `adsb start frontend --demo` (or `bun run dev:demo` / `just dev-demo`
+  for the Vite dev server) shows a simulated fleet with track history and no backend
+  running. The simulation lives in the browser behind the SPA's data layer, so it
+  exercises the real map, polling, filtering, and track code paths. The header shows a
+  "Demo data" badge.
 - **Backend and frontend are separate services** that can run on different machines.
   - `adsb start backend` is the decoder + REST API and nothing else: no HTML, no static
     files, no CORS.

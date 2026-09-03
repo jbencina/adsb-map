@@ -296,7 +296,12 @@ def backend(
     show_default=True,
 )
 @click.option("--port", default=3000, help="Port to bind to", show_default=True)
-def frontend(api_url: str, host: str, port: int):
+@click.option(
+    "--demo",
+    is_flag=True,
+    help="Show simulated aircraft instead of a backend's data (nothing else needs to run)",
+)
+def frontend(api_url: str, host: str, port: int, demo: bool):
     """
     Start the map UI.
 
@@ -312,6 +317,9 @@ def frontend(api_url: str, host: str, port: int):
 
         # Backend on the receiver
         adsb start frontend --api-url http://receiver.local:8000
+
+        # No backend at all: simulated traffic for trying out or testing the UI
+        adsb start frontend --demo
     """
     logging.basicConfig(
         level=logging.WARNING,
@@ -320,11 +328,14 @@ def frontend(api_url: str, host: str, port: int):
     )
 
     try:
-        app = create_ui_app(api_url)
+        app = create_ui_app(api_url, demo=demo)
     except (RuntimeError, ValueError) as e:
         raise click.ClickException(str(e)) from e
 
-    click.echo(f"Backend API: {app.state.api_url}")
+    if demo:
+        click.echo("Demo mode: simulated aircraft, no backend needed")
+    else:
+        click.echo(f"Backend API: {app.state.api_url}")
     _echo_checks(
         [
             (

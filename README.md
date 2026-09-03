@@ -68,6 +68,7 @@ Everything is a CLI argument except the Mapbox token. `.env` is for secrets only
 | Backend URL | `http://127.0.0.1:8000` | `adsb start frontend --api-url` |
 | Bind host / port | `127.0.0.1` / `3000` | `adsb start frontend --host --port` (`--host 0.0.0.0` to share on the LAN) |
 | Mapbox token | (required) | `MAPBOX_TOKEN` env var, or `.env` file in CWD |
+| Demo mode | off | `adsb start frontend --demo` (simulated aircraft, no backend) |
 
 `adsb download` writes the aircraft database to a per-user data directory
 (`~/.local/share/adsb-map/aircraft.csv` on Linux) rather than the working directory, so
@@ -94,7 +95,7 @@ the map polls `/api/all` every second; `--access-log` turns it back on.
 
 ```bash
 adsb start backend …    # decoder + REST API
-adsb start frontend …   # map UI, proxying to a backend (--api-url URL)
+adsb start frontend …   # map UI, proxying to a backend (--api-url URL, or --demo for simulated traffic)
 adsb download           # download tar1090-db aircraft database (--force to refresh)
 adsb init-db            # create SQLite tables
 adsb decode HEX         # decode a single message and store it
@@ -150,6 +151,21 @@ ADSB_API_URL=http://receiver.local:8000 bun run dev        # or: just dev-fronte
 
 `ADSB_API_URL` is a shell variable on the command line, not a `.env` entry. Same story for
 `bun run preview` after a build.
+
+## Demo mode
+
+To try the map, or work on the UI, without a receiver or backend at all, add `--demo`:
+
+```bash
+adsb start frontend --demo                 # bundled UI
+cd frontend && bun run dev:demo            # or: just dev-demo (Vite, hot reload)
+```
+
+The browser then answers every API call from a built-in simulator: a fixed fleet of
+airliners and light aircraft flying around the default map center, complete with track
+history, occasional reception gaps, and a couple of contacts without a position. The
+header shows a "Demo data" badge so simulated traffic is never mistaken for real. A
+Mapbox token is still needed for the base map.
 
 ## Network data sources
 

@@ -3,10 +3,10 @@ import react from '@vitejs/plugin-react'
 
 // In dev/preview the SPA gets its runtime config from this shim instead of
 // `adsb start frontend`'s /config.js. apiUrl stays empty: /api/* is proxied below.
-const configJs = mapboxToken => {
+const configJs = config => {
   const serve = (_req, res) => {
     res.setHeader('Content-Type', 'application/javascript')
-    res.end(`window.APP_CONFIG = ${JSON.stringify({ mapboxToken, apiUrl: '' })};`)
+    res.end(`window.APP_CONFIG = ${JSON.stringify({ ...config, apiUrl: '' })};`)
   }
   return {
     name: 'adsb-config-js',
@@ -22,13 +22,16 @@ const configJs = mapboxToken => {
 // Backend the dev/preview server proxies `/api/*` to. Point it at a remote
 // receiver to develop the UI against real data:
 //   ADSB_API_URL=http://receiver.local:8000 bun run dev
+// Or skip the backend entirely with simulated traffic:
+//   bun run dev:demo   (vite --mode demo)
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const target = (env.ADSB_API_URL || 'http://localhost:8000').replace(/\/+$/, '')
   const proxy = { '/api': { target, changeOrigin: true } }
+  const config = { mapboxToken: env.VITE_MAPBOX_TOKEN || '', demo: mode === 'demo' }
 
   return {
-    plugins: [react(), configJs(env.VITE_MAPBOX_TOKEN || '')],
+    plugins: [react(), configJs(config)],
     server: { port: 3000, host: true, proxy },
     preview: { port: 4173, host: true, proxy },
   }

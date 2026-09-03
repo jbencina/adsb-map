@@ -109,9 +109,9 @@ def no_uvicorn(monkeypatch):
 
 def test_ui_requires_built_frontend(tmp_path, monkeypatch, no_uvicorn):
     """`adsb start frontend` on a source checkout without `just build` fails with guidance, not a 503."""
-    import adsb.api
+    import adsb.ui
 
-    monkeypatch.setattr(adsb.api, "STATIC_DIR", tmp_path / "empty")
+    monkeypatch.setattr(adsb.ui, "STATIC_DIR", tmp_path / "empty")
 
     result = CliRunner().invoke(main, ["start", "frontend", "--api-url", "http://receiver:8000"])
 
@@ -120,12 +120,12 @@ def test_ui_requires_built_frontend(tmp_path, monkeypatch, no_uvicorn):
 
 
 def test_ui_rejects_url_without_scheme(tmp_path, monkeypatch, no_uvicorn):
-    import adsb.api
+    import adsb.ui
 
     static_dir = tmp_path / "static"
     (static_dir / "assets").mkdir(parents=True)
     (static_dir / "index.html").write_text("<html></html>")
-    monkeypatch.setattr(adsb.api, "STATIC_DIR", static_dir)
+    monkeypatch.setattr(adsb.ui, "STATIC_DIR", static_dir)
 
     result = CliRunner().invoke(main, ["start", "frontend", "--api-url", "receiver:8000"])
 
@@ -134,12 +134,12 @@ def test_ui_rejects_url_without_scheme(tmp_path, monkeypatch, no_uvicorn):
 
 
 def test_ui_launches_proxy_app(tmp_path, monkeypatch, no_uvicorn):
-    import adsb.api
+    import adsb.ui
 
     static_dir = tmp_path / "static"
     (static_dir / "assets").mkdir(parents=True)
     (static_dir / "index.html").write_text("<html></html>")
-    monkeypatch.setattr(adsb.api, "STATIC_DIR", static_dir)
+    monkeypatch.setattr(adsb.ui, "STATIC_DIR", static_dir)
     monkeypatch.chdir(tmp_path)  # keep the repo's own .env out of the picture
     monkeypatch.delenv("MAPBOX_TOKEN", raising=False)
 
@@ -150,34 +150,43 @@ def test_ui_launches_proxy_app(tmp_path, monkeypatch, no_uvicorn):
     assert result.exit_code == 0, result.output
     assert no_uvicorn["app"].state.api_url == "http://receiver.local:8000"
     assert no_uvicorn["port"] == 3456
-    assert "Mapbox token: from backend" in result.output
+    assert "[!!] MAPBOX_TOKEN unset" in result.output
 
 
-def test_ui_api_url_is_cli_only(tmp_path, monkeypatch, no_uvicorn):
-    """No env-var fallback: the backend URL is a CLI argument, not .env content."""
-    monkeypatch.setenv("ADSB_API_URL", "http://receiver.local:8000")
+def test_frontend_defaults_to_local_backend(tmp_path, monkeypatch, no_uvicorn):
+    """Single-machine use is just `adsb start backend` + `adsb start frontend`."""
+    import adsb.ui
+
+    static_dir = tmp_path / "static"
+    (static_dir / "assets").mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html></html>")
+    monkeypatch.setattr(adsb.ui, "STATIC_DIR", static_dir)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MAPBOX_TOKEN", "pk.local")
+    monkeypatch.delenv("ADSB_API_URL", raising=False)
 
     result = CliRunner().invoke(main, ["start", "frontend"])
 
-    assert result.exit_code != 0
-    assert "--api-url" in result.output
-    assert "app" not in no_uvicorn
+    assert result.exit_code == 0, result.output
+    assert no_uvicorn["app"].state.api_url == "http://127.0.0.1:8000"
+    assert "[ok] Mapbox token set" in result.output
 
 
-def test_serve_no_ui(tmp_path, monkeypatch, no_uvicorn):
-    """--no-ui reaches create_app and the preflight report."""
+def test_backend_is_api_only(tmp_path, monkeypatch, no_uvicorn):
+    """The backend never serves the UI and has no flag about it."""
     monkeypatch.chdir(tmp_path)
 
-    result = CliRunner().invoke(
-        main, ["start", "backend", "--no-ui", "--db-path", str(tmp_path / "t.db")]
-    )
+    result = CliRunner().invoke(main, ["start", "backend", "--db-path", str(tmp_path / "t.db")])
 
     assert result.exit_code == 0, result.output
-    assert "Map UI disabled (--no-ui)" in result.output
+    assert "Map UI" not in result.output
+    assert "MAPBOX" not in result.output
 
     client = TestClient(no_uvicorn["app"])
     assert client.get("/").status_code == 404
     assert client.get("/api").status_code == 200
+
+    assert CliRunner().invoke(main, ["start", "backend", "--no-ui"]).exit_code != 0
 
 
 def test_serve_aircraft_db_option_applies_before_preflight(tmp_path, monkeypatch, no_uvicorn):

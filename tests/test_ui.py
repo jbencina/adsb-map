@@ -33,7 +33,7 @@ def backend(test_db, test_session, aircraft):
             )
         )
     test_session.commit()
-    return create_app(test_db, serve_ui=False)
+    return create_app(test_db)
 
 
 @pytest.fixture
@@ -102,17 +102,8 @@ def test_ui_proxy_passes_backend_errors_through(ui_client):
     assert "ui-spa" not in response.text
 
 
-def test_ui_config_js_proxied_from_backend(ui_client, monkeypatch):
-    """Without a local token, the backend's MAPBOX_TOKEN reaches the browser."""
-    monkeypatch.setenv("MAPBOX_TOKEN", "pk.on_receiver")
-    response = ui_client.get("/config.js")
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/javascript")
-    assert "pk.on_receiver" in response.text
-
-
-def test_ui_config_js_prefers_local_token(static_dir, monkeypatch):
-    """A token on the client machine wins, and no backend round-trip is made."""
+def test_ui_config_js_from_local_token(static_dir, monkeypatch):
+    """The Mapbox token lives with the UI process; the backend is never asked."""
     monkeypatch.setenv("MAPBOX_TOKEN", "pk.on_client")
 
     def explode(request):
@@ -126,8 +117,18 @@ def test_ui_config_js_prefers_local_token(static_dir, monkeypatch):
     with TestClient(app) as client:
         response = client.get("/config.js")
     assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/javascript")
+    assert "window.APP_CONFIG" in response.text
     assert "pk.on_client" in response.text
     assert '"apiUrl": ""' in response.text
+
+
+def test_ui_config_js_without_token(ui_client, monkeypatch):
+    """No token still yields valid JS so the SPA can render its own hint."""
+    monkeypatch.delenv("MAPBOX_TOKEN", raising=False)
+    response = ui_client.get("/config.js")
+    assert response.status_code == 200
+    assert '"mapboxToken": ""' in response.text
 
 
 def test_ui_reports_unreachable_backend_as_502(static_dir):

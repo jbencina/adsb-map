@@ -9,48 +9,22 @@ from dotenv import find_dotenv, load_dotenv
 
 from adsb import __version__
 from adsb.aircraft_db import aircraft_db_path, set_aircraft_db_path
-from adsb.api import create_app, frontend_is_bundled
+from adsb.api import create_app
 from adsb.database import Database
 from adsb.decoder import ADSBDecoder
 from adsb.network import start_network_client
-from adsb.ui import create_ui_app
+from adsb.ui import DEFAULT_API_URL, create_ui_app
 
 AIRCRAFT_DB_URL = "https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz"
 
 
-def _echo_preflight(source: str, connect: tuple, serve_ui: bool) -> None:
-    """Report the things that otherwise fail silently at runtime.
+def _echo_checks(checks: list[tuple[bool, str, str]]) -> None:
+    """Print startup checks for things that otherwise fail silently at runtime.
 
-    Each of these leaves the server looking healthy while the map stays blank or
+    Each leaves the process looking healthy while the map stays blank or
     unenriched, so surface them once at startup instead of as buried log lines.
     """
-    db = aircraft_db_path()
-    if serve_ui:
-        ui_check = (
-            frontend_is_bundled(),
-            "Map UI bundled",
-            "Map UI not built - API only; see `just build`",
-        )
-    else:
-        ui_check = (True, "Map UI disabled (--no-ui) - API only", "")
-    checks = [
-        ui_check,
-        (
-            db.is_file(),
-            f"Aircraft database: {db}",
-            f"No aircraft database at {db} - run `adsb download` (or pass --aircraft-db)",
-        ),
-        (
-            bool(os.environ.get("MAPBOX_TOKEN")),
-            "Mapbox token set",
-            "MAPBOX_TOKEN unset - map tiles will not render",
-        ),
-        (
-            bool(source and connect),
-            "Data source configured",
-            "No data source - map stays empty; use --source net --connect HOST PORT TYPE",
-        ),
-    ]
+    click.echo("Startup checks:")
     for ok, good, bad in checks:
         click.echo(f"  [{'ok' if ok else '!!'}] {good if ok else bad}")
 
@@ -131,11 +105,6 @@ def start():
     type=float,
     help="Receiver longitude (required for accurate position decoding)",
 )
-@click.option(
-    "--no-ui",
-    is_flag=True,
-    help="Serve the REST API only; do not serve the bundled map UI at /",
-)
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development")
 @aircraft_db_option
 def backend(
@@ -147,11 +116,13 @@ def backend(
     stale_timeout: int,
     lat: float,
     lon: float,
-    no_ui: bool,
     reload: bool,
 ):
     """
-    Start the decoder and REST API (plus the bundled map UI unless --no-ui).
+    Start the decoder and REST API.
+
+    The map UI is a separate service: run `adsb start frontend` (on this or
+    any other machine) and point it here with --api-url.
 
     Examples:
 
@@ -163,9 +134,6 @@ def backend(
 
         # With a network data source
         adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
-
-        # API only; run the map elsewhere with `adsb start frontend --api-url http://this-host:8000`
-        adsb start backend --no-ui --source net --connect localhost 30005 beast
     """
     # Suppress deprecation warnings from dependencies
     import warnings
@@ -277,10 +245,23 @@ def backend(
         click.echo("Network decoder started successfully")
 
     # Create FastAPI app with network client for graceful shutdown
-    app = create_app(database, network_client, serve_ui=not no_ui)
+    app = create_app(database, network_client)
 
-    click.echo("Startup checks:")
-    _echo_preflight(source, connect, serve_ui=not no_ui)
+    db = aircraft_db_path()
+    _echo_checks(
+        [
+            (
+                db.is_file(),
+                f"Aircraft database: {db}",
+                f"No aircraft database at {db} - run `adsb download` (or pass --aircraft-db)",
+            ),
+            (
+                bool(source and connect),
+                "Data source configured",
+                "No data source - map stays empty; use --source net --connect HOST PORT TYPE",
+            ),
+        ]
+    )
 
     # Start server
     # Note: Uvicorn handles signals and will trigger FastAPI lifespan shutdown
@@ -291,9 +272,10 @@ def backend(
 @start.command()
 @click.option(
     "--api-url",
-    required=True,
+    default=DEFAULT_API_URL,
+    show_default=True,
     metavar="URL",
-    help="Base URL of the `adsb start backend` host, e.g. http://receiver.local:8000",
+    help="Base URL of the `adsb start backend` to display, e.g. http://receiver.local:8000",
 )
 @click.option(
     "--host",
@@ -304,15 +286,19 @@ def backend(
 @click.option("--port", default=3000, help="Port to bind to", show_default=True)
 def frontend(api_url: str, host: str, port: int):
     """
-    Start the map UI as a client of a remote backend.
+    Start the map UI.
 
-    Runs the bundled map on this machine and proxies /api/* to the backend
-    given by --api-url, so the receiver host only needs `adsb start backend`
-    and no CORS configuration. The Mapbox token comes from the backend unless
-    MAPBOX_TOKEN is set here.
+    Serves the bundled map and proxies /api/* to the backend given by
+    --api-url (same machine by default), so the browser stays same-origin and
+    the backend needs no CORS configuration. Needs MAPBOX_TOKEN in this
+    process's environment or a .env file in the working directory.
 
-    Example:
+    Examples:
 
+        # Backend on this machine
+        adsb start frontend
+
+        # Backend on the receiver
         adsb start frontend --api-url http://receiver.local:8000
     """
     import warnings
@@ -330,8 +316,15 @@ def frontend(api_url: str, host: str, port: int):
         raise click.ClickException(str(e)) from e
 
     click.echo(f"Backend API: {app.state.api_url}")
-    token_source = "local MAPBOX_TOKEN" if os.environ.get("MAPBOX_TOKEN") else "backend"
-    click.echo(f"Mapbox token: from {token_source}")
+    _echo_checks(
+        [
+            (
+                bool(os.environ.get("MAPBOX_TOKEN")),
+                "Mapbox token set",
+                "MAPBOX_TOKEN unset - map tiles will not render",
+            ),
+        ]
+    )
     click.echo(f"Starting map UI on http://{host}:{port}/")
     uvicorn.run(app, host=host, port=port, log_level="warning")
 

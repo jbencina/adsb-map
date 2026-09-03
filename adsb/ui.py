@@ -1,9 +1,10 @@
-"""Standalone map UI server that proxies to a remote ADS-B API.
+"""Map UI server (`adsb start frontend`).
 
-Lets the bundled frontend run as a client on a different machine from the
-decoder. ``adsb start frontend --api-url http://receiver:8000`` serves the SPA locally and
-forwards ``/api/*`` (and ``/config.js``) to the backend, so the browser only ever
-talks same-origin and the backend needs no CORS configuration.
+Serves the bundled React frontend and reverse-proxies ``/api/*`` to an
+``adsb start backend`` instance, which may be on another machine. The browser
+only ever talks to this process, so the backend needs no CORS configuration.
+The Mapbox token is injected at request time via ``/config.js`` from this
+process's ``MAPBOX_TOKEN``, so the token lives with the UI, not the receiver.
 """
 
 import json
@@ -13,13 +14,19 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 
-from adsb import __version__, api
-from adsb.api import frontend_is_bundled, mount_spa
+from adsb import __version__
 
 logger = logging.getLogger("adsb.ui")
+
+#: Built frontend, staged here by `just build` or CI before the wheel is built.
+STATIC_DIR = Path(__file__).parent / "static"
+
+#: Default backend, matching `adsb start backend` defaults on the same machine.
+DEFAULT_API_URL = "http://127.0.0.1:8000"
 
 #: Seconds to wait for the backend before answering 504. `/api/all` on a busy
 #: receiver is well under a second; anything longer is a connectivity problem.
@@ -41,6 +48,17 @@ _HOP_BY_HOP = frozenset(
         "content-encoding",
     }
 )
+
+FRONTEND_MISSING_HELP = (
+    "Frontend not bundled ({static_dir} has no index.html). "
+    "Run `just build`, or install the published wheel with `pip install adsb-map`."
+)
+
+
+def frontend_is_bundled(static_dir: Path | None = None) -> bool:
+    """Return True when the built frontend has been staged into the package."""
+    static_dir = STATIC_DIR if static_dir is None else static_dir
+    return static_dir.is_dir() and (static_dir / "index.html").is_file()
 
 
 def normalize_api_url(api_url: str) -> str:
@@ -68,19 +86,28 @@ def normalize_api_url(api_url: str) -> str:
     return str(url).rstrip("/")
 
 
+def config_js_body(mapbox_token: str) -> str:
+    """JavaScript that hands runtime config to the SPA as ``window.APP_CONFIG``.
+
+    ``apiUrl`` is always empty: the SPA calls ``/api/*`` same-origin and this
+    server forwards it, so one bundle works for any backend without a rebuild.
+    """
+    return f"window.APP_CONFIG = {json.dumps({'mapboxToken': mapbox_token, 'apiUrl': ''})};"
+
+
 def create_ui_app(
-    api_url: str,
+    api_url: str = DEFAULT_API_URL,
     *,
     static_dir: Path | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """
-    Create the UI-only FastAPI application.
+    Create the frontend FastAPI application.
 
     Parameters
     ----------
-    api_url : str
-        Base URL of the ``adsb start backend`` backend to proxy to
+    api_url : str, optional
+        Base URL of the ``adsb start backend`` instance to proxy to
     static_dir : Path, optional
         Directory holding the built frontend; defaults to the bundled one
     transport : httpx.AsyncBaseTransport, optional
@@ -99,12 +126,9 @@ def create_ui_app(
     ValueError
         If ``api_url`` is not an absolute http(s) URL
     """
-    static_dir = api.STATIC_DIR if static_dir is None else static_dir
+    static_dir = STATIC_DIR if static_dir is None else static_dir
     if not frontend_is_bundled(static_dir):
-        raise RuntimeError(
-            f"Frontend not bundled ({static_dir} has no index.html). "
-            "Run `just build`, or install the published wheel with `pip install adsb-map`."
-        )
+        raise RuntimeError(FRONTEND_MISSING_HELP.format(static_dir=static_dir))
     api_url = normalize_api_url(api_url)
 
     @asynccontextmanager
@@ -159,19 +183,23 @@ def create_ui_app(
     async def proxy_api(request: Request, path: str):
         return await proxy(request, f"/api/{path}")
 
-    # The Mapbox token normally comes from the backend's environment via its
-    # /config.js. A token set on *this* machine takes precedence, so a client
-    # can supply its own without touching the receiver.
+    # Read at request time (not at startup) so a token added to the environment
+    # is picked up without a restart, and so tests can vary it per request.
     @app.get("/config.js", include_in_schema=False)
-    async def config_js(request: Request):
-        token = os.environ.get("MAPBOX_TOKEN", "")
-        if not token:
-            return await proxy(request, "/config.js")
-        config = {"mapboxToken": token, "apiUrl": ""}
+    async def config_js():
         return Response(
-            content=f"window.APP_CONFIG = {json.dumps(config)};",
+            content=config_js_body(os.environ.get("MAPBOX_TOKEN", "")),
             media_type="application/javascript",
         )
 
-    mount_spa(app, static_dir)
+    app.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
+
+    # SPA fallback: any path not claimed above serves index.html so client-side
+    # routing works. The guard keeps the SPA shell from ever leaking under /api.
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        if full_path.startswith("api/") or full_path == "api":
+            raise HTTPException(status_code=404)
+        return FileResponse(static_dir / "index.html")
+
     return app

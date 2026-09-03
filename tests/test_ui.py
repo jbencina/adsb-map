@@ -143,7 +143,7 @@ def test_ui_reports_unreachable_backend_as_502(static_dir):
     with TestClient(app) as client:
         response = client.get("/api/all")
     assert response.status_code == 502
-    assert "http://receiver.test:8000" in response.json()["detail"]
+    assert response.json()["detail"] == "Cannot reach backend at http://receiver.test:8000"
 
 
 def test_ui_reports_backend_timeout_as_504(static_dir):

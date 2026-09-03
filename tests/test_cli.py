@@ -107,6 +107,14 @@ def no_uvicorn(monkeypatch):
     return launched
 
 
+@pytest.fixture(autouse=True)
+def _no_bundled_frontend(tmp_path, monkeypatch):
+    """Never let a test depend on whether this checkout has run `just build`."""
+    import adsb.ui
+
+    monkeypatch.setattr(adsb.ui, "STATIC_DIR", tmp_path / "unbuilt")
+
+
 @pytest.fixture
 def built_frontend(tmp_path, monkeypatch):
     """Point adsb.ui at a minimal built frontend."""
@@ -119,12 +127,8 @@ def built_frontend(tmp_path, monkeypatch):
     return static_dir
 
 
-def test_ui_requires_built_frontend(tmp_path, monkeypatch, no_uvicorn):
-    """`adsb start frontend` on a source checkout without `just build` fails with guidance, not a 503."""
-    import adsb.ui
-
-    monkeypatch.setattr(adsb.ui, "STATIC_DIR", tmp_path / "empty")
-
+def test_ui_requires_built_frontend(no_uvicorn):
+    """Without `just build`, `adsb start frontend` fails with guidance instead of starting."""
     result = CliRunner().invoke(main, ["start", "frontend", "--api-url", "http://receiver:8000"])
 
     assert result.exit_code != 0
@@ -138,7 +142,7 @@ def test_ui_rejects_url_without_scheme(built_frontend, no_uvicorn):
     assert "http://host:port" in result.output
 
 
-def test_ui_launches_proxy_app(tmp_path, monkeypatch, no_uvicorn):
+def test_ui_launches_proxy_app(tmp_path, monkeypatch, built_frontend, no_uvicorn):
     monkeypatch.chdir(tmp_path)  # keep the repo's own .env out of the picture
     monkeypatch.delenv("MAPBOX_TOKEN", raising=False)
 
@@ -152,7 +156,7 @@ def test_ui_launches_proxy_app(tmp_path, monkeypatch, no_uvicorn):
     assert "[!!] MAPBOX_TOKEN unset" in result.output
 
 
-def test_frontend_defaults_to_local_backend(tmp_path, monkeypatch, no_uvicorn):
+def test_frontend_defaults_to_local_backend(tmp_path, monkeypatch, built_frontend, no_uvicorn):
     """Single-machine use is just `adsb start backend` + `adsb start frontend`."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MAPBOX_TOKEN", "pk.local")

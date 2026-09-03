@@ -164,10 +164,7 @@ def create_ui_app(
             )
         except httpx.HTTPError as e:
             logger.warning("Cannot reach backend %s%s: %s", api_url, path, e)
-            return JSONResponse(
-                {"detail": f"Cannot reach backend at {api_url}: {e}"},
-                status_code=502,
-            )
+            return JSONResponse({"detail": f"Cannot reach backend at {api_url}"}, status_code=502)
         headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
         return Response(
             content=upstream.content,

@@ -172,6 +172,10 @@
   opacity: calc(1 - var(--age, 0) * 0.45);
 }
 
+.tag[hidden] {
+  display: none;
+}
+
 .tag.selected {
   background: var(--accent);
   border-color: transparent;

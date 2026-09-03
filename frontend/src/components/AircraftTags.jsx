@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import PropTypes from 'prop-types'
 import { layoutTags } from './tagLayout'
 
@@ -9,26 +9,34 @@ const TAG_PAD_X = 7
 const TAG_HEIGHT = 19
 
 let measureCtx = null
+const widthCache = new Map()
 
 /**
- * Width of a label in px, as the pill will render it
+ * Width of a pill for a label, in px
  *
  * @param {string} text - Label text
  * @returns {number} Width in px
  */
-function measure(text) {
-  if (!measureCtx) {
-    measureCtx = document.createElement('canvas').getContext('2d')
-    measureCtx.font = TAG_FONT
+function pillWidth(text) {
+  if (!widthCache.has(text)) {
+    if (!measureCtx) {
+      measureCtx = document.createElement('canvas').getContext('2d')
+      measureCtx.font = TAG_FONT
+    }
+    const w = measureCtx.measureText(text).width + text.length * TAG_LETTER_SPACING
+    widthCache.set(text, Math.ceil(w) + TAG_PAD_X * 2 + 2)
   }
-  return Math.ceil(measureCtx.measureText(text).width + text.length * TAG_LETTER_SPACING)
+  return widthCache.get(text)
 }
+
+const labelFor = ac => ac.callsign?.replace(/_+$/, '') || ac.icao24.toUpperCase()
 
 /**
  * Callsign tags beside each plane, with a thin leader line back to the glyph.
  *
- * Positions are recomputed in screen space on every map move and data refresh, so
- * tags follow their planes and never overlap one another or another plane.
+ * React owns one pill and one leader per aircraft; their positions are written
+ * straight to the DOM from the map's move event, in the same frame Mapbox moves
+ * its markers, so the tags never trail the planes during a pan.
  *
  * @param {Object} props - Component props
  * @param {Object} props.map - The mapbox-gl map instance, once loaded
@@ -39,70 +47,94 @@ function measure(text) {
  * @returns {JSX.Element|null} The tag overlay
  */
 function AircraftTags({ map, aircraft, selectedId, maxAgeMinutes, visible }) {
-  const [tags, setTags] = useState([])
+  const layerRef = useRef(null)
 
   useEffect(() => {
-    if (!map || !visible) {
-      setTags([])
-      return undefined
-    }
-    const compute = () => {
+    const layer = layerRef.current
+    if (!map || !visible || !layer) return undefined
+
+    const pills = new Map()
+    const leaders = new Map()
+    layer.querySelectorAll('.tag').forEach(el => pills.set(el.dataset.id, el))
+    layer.querySelectorAll('line').forEach(el => leaders.set(el.dataset.id, el))
+
+    const place = () => {
       const canvas = map.getCanvas()
-      const width = canvas.clientWidth
-      const height = canvas.clientHeight
-      const now = Math.floor(Date.now() / 1000)
       const items = aircraft.map(ac => {
-        const label = ac.callsign?.replace(/_+$/, '') || ac.icao24.toUpperCase()
+        const label = labelFor(ac)
         const point = map.project([ac.longitude, ac.latitude])
-        const age = ac.lastseen ? Math.min((now - ac.lastseen) / 60 / maxAgeMinutes, 1) : 0
         return {
           id: ac.icao24,
           label,
           cx: point.x,
           cy: point.y,
-          w: measure(label) + TAG_PAD_X * 2 + 2,
+          w: pillWidth(label),
           h: TAG_HEIGHT,
           selected: ac.icao24 === selectedId,
-          age,
+          age: ac.age,
         }
       })
-      setTags(layoutTags(items, { width, height }))
+      const placed = layoutTags(items, { width: canvas.clientWidth, height: canvas.clientHeight })
+      const shown = new Set()
+      for (const t of placed) {
+        shown.add(t.id)
+        const pill = pills.get(t.id)
+        pill.hidden = false
+        pill.style.width = `${t.w}px`
+        pill.style.transform = `translate(${t.x}px, ${t.y}px)`
+        const line = leaders.get(t.id)
+        if (t.leader) {
+          line.setAttribute('x1', t.leader.x1)
+          line.setAttribute('y1', t.leader.y1)
+          line.setAttribute('x2', t.leader.x2)
+          line.setAttribute('y2', t.leader.y2)
+          line.setAttribute('visibility', 'visible')
+        } else {
+          line.setAttribute('visibility', 'hidden')
+        }
+      }
+      pills.forEach((pill, id) => {
+        if (shown.has(id)) return
+        pill.hidden = true
+        leaders.get(id).setAttribute('visibility', 'hidden')
+      })
     }
-    compute()
-    map.on('move', compute)
-    map.on('resize', compute)
-    return () => {
-      map.off('move', compute)
-      map.off('resize', compute)
-    }
-  }, [map, aircraft, selectedId, maxAgeMinutes, visible])
 
-  if (!visible || tags.length === 0) return null
+    place()
+    map.on('move', place)
+    map.on('resize', place)
+    return () => {
+      map.off('move', place)
+      map.off('resize', place)
+    }
+  }, [map, aircraft, selectedId, visible])
+
+  if (!visible) return null
+
+  const now = Math.floor(Date.now() / 1000)
+  const ageOf = ac => (ac.lastseen ? Math.min((now - ac.lastseen) / 60 / maxAgeMinutes, 1) : 0)
 
   return (
-    <div className="tag-layer" aria-hidden="true">
+    <div className="tag-layer" ref={layerRef} aria-hidden="true">
       <svg className="tag-leaders">
-        {tags.map(
-          t =>
-            t.leader && (
-              <line
-                key={t.id}
-                className={t.selected ? 'selected' : ''}
-                x1={t.leader.x1}
-                y1={t.leader.y1}
-                x2={t.leader.x2}
-                y2={t.leader.y2}
-              />
-            )
-        )}
+        {aircraft.map(ac => (
+          <line
+            key={ac.icao24}
+            data-id={ac.icao24}
+            className={ac.icao24 === selectedId ? 'selected' : ''}
+            visibility="hidden"
+          />
+        ))}
       </svg>
-      {tags.map(t => (
+      {aircraft.map(ac => (
         <div
-          key={t.id}
-          className={`tag ${t.selected ? 'selected' : ''}`}
-          style={{ transform: `translate(${t.x}px, ${t.y}px)`, width: t.w, '--age': t.age }}
+          key={ac.icao24}
+          data-id={ac.icao24}
+          className={`tag ${ac.icao24 === selectedId ? 'selected' : ''}`}
+          style={{ '--age': ageOf(ac) }}
+          hidden
         >
-          {t.label}
+          {labelFor(ac)}
         </div>
       ))}
     </div>

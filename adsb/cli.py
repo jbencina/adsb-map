@@ -13,6 +13,7 @@ from adsb.api import create_app
 from adsb.database import Database
 from adsb.decoder import ADSBDecoder
 from adsb.network import start_network_client
+from adsb.status import StatusReporter
 from adsb.ui import DEFAULT_API_URL, create_ui_app
 
 AIRCRAFT_DB_URL = "https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz"
@@ -105,6 +106,18 @@ def start():
     type=float,
     help="Receiver longitude (required for accurate position decoding)",
 )
+@click.option(
+    "--stats-interval",
+    default=10,
+    show_default=True,
+    metavar="SECONDS",
+    help="Print a feed/decoding status line this often (0 to disable)",
+)
+@click.option(
+    "--access-log",
+    is_flag=True,
+    help="Log every HTTP request (noisy: the map polls /api/all every second)",
+)
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development")
 @aircraft_db_option
 def backend(
@@ -116,6 +129,8 @@ def backend(
     stale_timeout: int,
     lat: float,
     lon: float,
+    stats_interval: int,
+    access_log: bool,
     reload: bool,
 ):
     """
@@ -171,6 +186,15 @@ def backend(
     # Set decoder logger to WARNING to reduce noise (individual aircraft updates)
     logging.getLogger("adsb.decoder").setLevel(logging.WARNING)
 
+    # Periodic status line gets its own prefix, like [ADSB] and [API].
+    status_logger = logging.getLogger("adsb.status")
+    status_handler = logging.StreamHandler()
+    status_handler.setFormatter(
+        logging.Formatter("%(asctime)s - [STATUS] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    )
+    status_logger.addHandler(status_handler)
+    status_logger.propagate = False
+
     # Custom uvicorn log config to add [API] prefix to access logs
     log_config = {
         "version": 1,
@@ -200,7 +224,7 @@ def backend(
         "loggers": {
             "uvicorn.access": {
                 "handlers": ["api"],
-                "level": "INFO",
+                "level": "INFO" if access_log else "WARNING",
                 "propagate": False,
             },
             "uvicorn.error": {
@@ -263,10 +287,18 @@ def backend(
         ]
     )
 
+    reporter = None
+    if stats_interval > 0:
+        reporter = StatusReporter(database, network_client, interval=stats_interval).start()
+
     # Start server
     # Note: Uvicorn handles signals and will trigger FastAPI lifespan shutdown
     click.echo(f"Starting API server on http://{host}:{port}/")
-    uvicorn.run(app, host=host, port=port, reload=reload, log_config=log_config)
+    try:
+        uvicorn.run(app, host=host, port=port, reload=reload, log_config=log_config)
+    finally:
+        if reporter is not None:
+            reporter.stop()
 
 
 @start.command()

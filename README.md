@@ -62,6 +62,8 @@ Everything is a CLI argument except the Mapbox token. `.env` is for secrets only
 | Stale timeout | `60s` | `adsb start backend --stale-timeout` |
 | Receiver lat/lon | (none) | `adsb start backend --lat --lon` (recommended) |
 | Aircraft database | per-user data dir | `--aircraft-db PATH` on `start backend`, `download`, `decode` |
+| Status line interval | `10s` | `adsb start backend --stats-interval` (`0` disables) |
+| HTTP access log | off | `adsb start backend --access-log` |
 | **Frontend** | | |
 | Backend URL | `http://127.0.0.1:8000` | `adsb start frontend --api-url` |
 | Bind host / port | `127.0.0.1` / `3000` | `adsb start frontend --host --port` (`--host 0.0.0.0` to share on the LAN) |
@@ -76,6 +78,17 @@ found.
 `--lat` and `--lon` are strongly recommended: ADS-B position messages use Compact Position
 Reporting (CPR), which decodes faster and more accurately when given a reference position
 within ~180 NM of the receiver.
+
+While running, the backend prints a status line every `--stats-interval` seconds so you
+can tell at a glance whether the feed is alive and what it is decoding:
+
+```
+2026-09-02 19:05:10 - [STATUS] feed localhost:30005 (beast) | last msg <1s ago | 10s: 1,842 msgs (184/s), 131 pos, 27 ac | tracking 31 ac (24 w/ pos) | total 96,210 msgs, 7,455 pos, 142 ac
+```
+
+`last msg … (feed stalled?)` appears when nothing has arrived for over 30 seconds, and
+`no data yet` until the first message. Per-request HTTP logging is off by default because
+the map polls `/api/all` every second; `--access-log` turns it back on.
 
 ## CLI
 
@@ -103,7 +116,8 @@ paths (proxied) plus the map itself.
 | `GET /api/track?icao24={icao24}&since={ts}` | Trajectory for one aircraft |
 | `GET /api/sensors` | Receiver/sensor info (serials) |
 | `GET /api` | API discovery (welcome JSON) |
-| `GET /` | Map UI (frontend only) |
+| `GET /docs` | Interactive OpenAPI docs (backend) |
+| `GET /` | Backend: same discovery JSON as `/api`. Frontend: the map |
 | `GET /config.js` | Runtime config shim exposing `MAPBOX_TOKEN` to the SPA (frontend only) |
 
 The REST API is self-contained — you can ignore the map and build your own client
@@ -227,6 +241,7 @@ unzip -l dist/adsb_map-*.whl | grep adsb/static/
 | `database.py` | Session/engine management with context-manager pattern |
 | `schemas.py` | Pydantic response models |
 | `aircraft_db.py` | Lazy-loaded singleton CSV (566k+ rows) → registration/type lookup; owns `aircraft_db_path()`, the one location both `download` and the loader use |
+| `status.py` | `StatusReporter` — daemon thread printing the periodic `[STATUS]` line |
 | `cli.py` | Click CLI: `start backend`, `start frontend`, `download`, `init-db`, `decode`, `cleanup`, `db-size` |
 | `static/` | Built frontend assets served by `ui.py` (populated by `just build` or CI; gitignored) |
 

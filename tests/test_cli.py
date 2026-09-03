@@ -183,7 +183,8 @@ def test_backend_is_api_only(tmp_path, monkeypatch, no_uvicorn):
     assert "MAPBOX" not in result.output
 
     client = TestClient(no_uvicorn["app"])
-    assert client.get("/").status_code == 404
+    assert client.get("/").status_code == 200
+    assert "routes" in client.get("/").json()
     assert client.get("/api").status_code == 200
 
     assert CliRunner().invoke(main, ["start", "backend", "--no-ui"]).exit_code != 0
@@ -201,3 +202,45 @@ def test_serve_aircraft_db_option_applies_before_preflight(tmp_path, monkeypatch
 
     assert result.exit_code == 0, result.output
     assert f"[ok] Aircraft database: {target}" in result.output
+
+
+def test_backend_status_reporter_lifecycle(tmp_path, monkeypatch, no_uvicorn):
+    """The reporter starts before uvicorn and is stopped when uvicorn returns."""
+    import adsb.cli
+
+    monkeypatch.chdir(tmp_path)
+    started = []
+    orig_start = adsb.cli.StatusReporter.start
+    orig_stop = adsb.cli.StatusReporter.stop
+    monkeypatch.setattr(
+        adsb.cli.StatusReporter, "start", lambda self: started.append(self) or orig_start(self)
+    )
+    stopped = []
+    monkeypatch.setattr(
+        adsb.cli.StatusReporter, "stop", lambda self: stopped.append(self) or orig_stop(self)
+    )
+
+    result = CliRunner().invoke(
+        main, ["start", "backend", "--db-path", str(tmp_path / "t.db"), "--stats-interval", "5"]
+    )
+    assert result.exit_code == 0, result.output
+    assert len(started) == 1 and started[0].interval == 5
+    assert stopped == started
+
+    started.clear()
+    result = CliRunner().invoke(
+        main, ["start", "backend", "--db-path", str(tmp_path / "t.db"), "--stats-interval", "0"]
+    )
+    assert result.exit_code == 0, result.output
+    assert started == []
+
+
+def test_backend_access_log_off_by_default(tmp_path, monkeypatch, no_uvicorn):
+    monkeypatch.chdir(tmp_path)
+    CliRunner().invoke(main, ["start", "backend", "--db-path", str(tmp_path / "t.db")])
+    assert no_uvicorn["log_config"]["loggers"]["uvicorn.access"]["level"] == "WARNING"
+
+    CliRunner().invoke(
+        main, ["start", "backend", "--db-path", str(tmp_path / "t.db"), "--access-log"]
+    )
+    assert no_uvicorn["log_config"]["loggers"]["uvicorn.access"]["level"] == "INFO"

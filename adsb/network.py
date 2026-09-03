@@ -46,22 +46,29 @@ class ADSBNetworkClient(TcpClient):
         cleanup_interval: int = 30,
         lat_ref: float | None = None,
         lon_ref: float | None = None,
-        telemetry_interval: int = 30,
     ):
         """Initialize network client."""
         super().__init__(host, port, rawtype)
         self.database = database
         self.stale_timeout = stale_timeout
         self.cleanup_interval = cleanup_interval
-        self.telemetry_interval = telemetry_interval
         self.lat_ref = lat_ref
         self.lon_ref = lon_ref
         self.last_cleanup = time.time()
-        self.last_telemetry = time.time()
         self._stop_event = threading.Event()
 
-        # Telemetry counters (reset every interval)
-        self.interval_stats = {
+        # Counters are written by the client thread and read by the status
+        # reporter thread; the lock keeps snapshot() atomic.
+        self._lock = threading.Lock()
+        self.last_message_at: float | None = None
+        self._interval = self._empty_interval()
+        self.total_messages = 0
+        self.total_positions = 0
+        self.total_aircraft: set[str] = set()
+
+    @staticmethod
+    def _empty_interval() -> dict:
+        return {
             "messages_received": 0,
             "messages_processed": 0,
             "messages_invalid": 0,
@@ -70,12 +77,39 @@ class ADSBNetworkClient(TcpClient):
             "errors": 0,
         }
 
-        # Cumulative stats
-        self.total_stats = {
-            "messages_processed": 0,
-            "positions_decoded": 0,
-            "aircraft_total": set(),
-        }
+    def snapshot(self) -> dict:
+        """
+        Return decoding statistics and reset the per-interval counters.
+
+        Called by the status reporter once per interval. Totals accumulate
+        for the life of the process.
+
+        Returns
+        -------
+        dict
+            ``interval`` (counts since the previous snapshot), ``total``
+            (cumulative counts), and ``last_message_at`` (epoch seconds of the
+            most recent message from the feed, or None if nothing yet)
+        """
+        with self._lock:
+            interval = self._interval
+            self._interval = self._empty_interval()
+            return {
+                "interval": {
+                    "messages_received": interval["messages_received"],
+                    "messages_processed": interval["messages_processed"],
+                    "messages_invalid": interval["messages_invalid"],
+                    "positions_decoded": interval["positions_decoded"],
+                    "aircraft_seen": len(interval["aircraft_seen"]),
+                    "errors": interval["errors"],
+                },
+                "total": {
+                    "messages_processed": self.total_messages,
+                    "positions_decoded": self.total_positions,
+                    "aircraft_seen": len(self.total_aircraft),
+                },
+                "last_message_at": self.last_message_at,
+            }
 
     def handle_messages(self, messages):
         """
@@ -86,7 +120,12 @@ class ADSBNetworkClient(TcpClient):
         messages : list of tuple
             List of (message, timestamp) tuples
         """
-        self.interval_stats["messages_received"] += len(messages)
+        if not messages:
+            return
+
+        with self._lock:
+            self._interval["messages_received"] += len(messages)
+            self.last_message_at = time.time()
 
         with self.database.get_session() as session:
             decoder = ADSBDecoder(
@@ -99,28 +138,32 @@ class ADSBNetworkClient(TcpClient):
             for msg, ts in messages:
                 # Skip invalid message lengths
                 if len(msg) not in [14, 28]:
-                    self.interval_stats["messages_invalid"] += 1
+                    with self._lock:
+                        self._interval["messages_invalid"] += 1
                     continue
 
                 try:
-                    # Process the message
                     result = decoder.process_message(msg, timestamp=ts)
-                    self.interval_stats["messages_processed"] += 1
-                    self.total_stats["messages_processed"] += 1
-
-                    # Track aircraft seen
-                    if result and hasattr(result, "icao24"):
-                        self.interval_stats["aircraft_seen"].add(result.icao24)
-                        self.total_stats["aircraft_total"].add(result.icao24)
-
-                        # Check if position was decoded
-                        if result.latitude is not None and result.longitude is not None:
-                            self.interval_stats["positions_decoded"] += 1
-                            self.total_stats["positions_decoded"] += 1
-
                 except Exception as e:
-                    self.interval_stats["errors"] += 1
+                    with self._lock:
+                        self._interval["errors"] += 1
                     adsb_logger.debug(f"Error processing message {msg}: {e}")
+                    continue
+
+                has_position = (
+                    result is not None
+                    and result.latitude is not None
+                    and result.longitude is not None
+                )
+                with self._lock:
+                    self._interval["messages_processed"] += 1
+                    self.total_messages += 1
+                    if result is not None:
+                        self._interval["aircraft_seen"].add(result.icao24)
+                        self.total_aircraft.add(result.icao24)
+                    if has_position:
+                        self._interval["positions_decoded"] += 1
+                        self.total_positions += 1
 
             # Periodically cleanup stale aircraft
             current_time = time.time()
@@ -129,52 +172,6 @@ class ADSBNetworkClient(TcpClient):
                 if removed > 0:
                     adsb_logger.debug(f"Cleaned up {removed} stale aircraft")
                 self.last_cleanup = current_time
-
-            # Periodic telemetry logging
-            if current_time - self.last_telemetry > self.telemetry_interval:
-                self._log_telemetry(current_time)
-                self.last_telemetry = current_time
-
-    def _log_telemetry(self, current_time: float):
-        """Log periodic telemetry statistics."""
-        elapsed = current_time - (
-            self.last_telemetry
-            if hasattr(self, "last_telemetry")
-            else current_time - self.telemetry_interval
-        )
-
-        # Calculate rates
-        msg_rate = self.interval_stats["messages_received"] / elapsed if elapsed > 0 else 0
-        pos_rate = self.interval_stats["positions_decoded"] / elapsed if elapsed > 0 else 0
-
-        # Log interval statistics
-        adsb_logger.info(
-            f"[ADSB TELEMETRY] Interval: {elapsed:.1f}s | "
-            f"Messages: {self.interval_stats['messages_received']} received, "
-            f"{self.interval_stats['messages_processed']} processed, "
-            f"{self.interval_stats['messages_invalid']} invalid | "
-            f"Positions: {self.interval_stats['positions_decoded']} | "
-            f"Aircraft: {len(self.interval_stats['aircraft_seen'])} | "
-            f"Rates: {msg_rate:.1f} msg/s, {pos_rate:.1f} pos/s | "
-            f"Errors: {self.interval_stats['errors']}"
-        )
-
-        # Log cumulative statistics
-        adsb_logger.info(
-            f"[ADSB CUMULATIVE] Total messages: {self.total_stats['messages_processed']:,} | "
-            f"Total positions: {self.total_stats['positions_decoded']:,} | "
-            f"Unique aircraft: {len(self.total_stats['aircraft_total'])}"
-        )
-
-        # Reset interval counters
-        self.interval_stats = {
-            "messages_received": 0,
-            "messages_processed": 0,
-            "messages_invalid": 0,
-            "positions_decoded": 0,
-            "aircraft_seen": set(),
-            "errors": 0,
-        }
 
     def stop(self):
         """Signal the client to stop gracefully."""

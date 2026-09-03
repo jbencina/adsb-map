@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Startup checks for the conditions that otherwise fail silently: `adsb start backend`
   reports the aircraft database and data source; `adsb start frontend` reports
   `MAPBOX_TOKEN`.
+- `adsb start backend` prints a `[STATUS]` line every `--stats-interval` seconds (default
+  10, `0` disables): feed address, time since the last message (flagging a stalled feed),
+  messages/positions/aircraft in the window with the message rate, aircraft currently
+  tracked, and cumulative totals. Replaces the old telemetry lines, which only fired while
+  messages were flowing.
+- `GET /` on the backend returns the same discovery JSON as `/api` (now also listing
+  `/docs`) instead of a 404, so opening port 8000 in a browser explains where the data is.
 - `--aircraft-db PATH` on `adsb start backend`, `adsb download` and `adsb decode` overrides the
   aircraft database location.
 - `just bootstrap` installs bun; `just build` now fails with an actionable message when
@@ -56,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Static-file and SPA helpers moved from `adsb.api` to `adsb.ui` (`STATIC_DIR`,
   `frontend_is_bundled`, `create_ui_app`).
 - `httpx` is now a runtime dependency (used by the `adsb start frontend` proxy).
+- Per-request HTTP access logging on the backend is off by default (the map polls
+  `/api/all` every second, drowning everything else); `--access-log` re-enables it.
+- `ADSBNetworkClient` exposes `snapshot()` for thread-safe stats; the `telemetry_interval`
+  argument and `_log_telemetry` are gone.
 - **Breaking:** `AircraftDatabase` no longer auto-extracts a sibling `aircraft.csv.gz`;
   `adsb download` is the one supported way to obtain the database.
 - `adsb.api._frontend_is_bundled` is now public `adsb.ui.frontend_is_bundled`.

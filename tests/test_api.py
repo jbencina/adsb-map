@@ -262,9 +262,14 @@ def test_api_endpoints_exist(test_db, endpoint, expected_status):
     assert response.status_code == expected_status
 
 
-def test_backend_serves_no_ui(client):
-    """The backend is API-only: nothing at / or /config.js, ever."""
-    assert client.get("/").status_code == 404
+def test_backend_root_is_api_index(client):
+    """The backend has no UI, so / explains the API instead of 404ing."""
+    root = client.get("/")
+    assert root.status_code == 200
+    assert root.json() == client.get("/api").json()
+    assert "/api/all" in root.json()["routes"]
+    assert "adsb start frontend" in root.json()["map_ui"]
+
     assert client.get("/config.js").status_code == 404
     assert client.get("/api/nonexistent").status_code == 404
 

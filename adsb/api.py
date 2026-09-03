@@ -22,6 +22,23 @@ db_instance: Database | None = None
 network_client_instance = None
 
 
+def api_index() -> dict:
+    """Discovery document served at ``/`` and ``/api``."""
+    return {
+        "message": "Welcome to the ADS-B REST API!",
+        "routes": {
+            "/api/all": "returns all current state vectors",
+            "/api/icao24": "returns all ICAO 24-bit addresses seen",
+            "/api/track?icao24={icao24}&since={timestamp}": (
+                "returns the trajectory of a given aircraft"
+            ),
+            "/api/sensors": "returns information about all sensors",
+            "/docs": "interactive OpenAPI documentation",
+        },
+        "map_ui": "run `adsb start frontend --api-url <this server>` and open its port",
+    }
+
+
 def get_db() -> Database:
     """
     Get database instance.
@@ -101,17 +118,14 @@ def create_app(database: Database, network_client=None) -> FastAPI:
         dict
             Welcome message and available routes
         """
-        return {
-            "message": "Welcome to the ADS-B REST API!",
-            "routes": {
-                "/api/all": "returns all current state vectors",
-                "/api/icao24": "returns all ICAO 24-bit addresses seen",
-                "/api/track?icao24={icao24}&since={timestamp}": (
-                    "returns the trajectory of a given aircraft"
-                ),
-                "/api/sensors": "returns information about all sensors",
-            },
-        }
+        return api_index()
+
+    # The backend has no UI, so `/` answers with the same discovery document
+    # instead of a bare 404 -- someone opening port 8000 in a browser should
+    # learn where the data is.
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return api_index()
 
     @app.get("/api/all", response_model=list[AircraftStateSchema])
     async def get_all_aircraft(session: Session = Depends(get_session)):

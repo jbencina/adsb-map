@@ -145,7 +145,7 @@
   position: absolute;
   top: 76px;
   right: var(--gutter);
-  width: 360px;
+  width: 376px;
   max-height: calc(100% - 76px - var(--gutter));
   display: flex;
   flex-direction: column;
@@ -256,22 +256,24 @@
 /* Flight strip: the three live numbers */
 .flight-strip {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* Tracks size to their numbers, so a wide reading grows its tile rather than overflowing it */
+  grid-template-columns: repeat(3, auto);
   gap: 8px;
 }
 
 .stat {
   background: var(--surface-2);
   border-radius: 12px;
-  padding: 12px 12px 10px;
+  padding: 11px 11px 10px;
   min-width: 0;
 }
 
 .stat .stat-value {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 3px;
-  font-size: 21px;
+  font-size: 19px;
   font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 1;
@@ -280,7 +282,7 @@
 }
 
 .stat .stat-value small {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   letter-spacing: 0;
   color: var(--ink-2);

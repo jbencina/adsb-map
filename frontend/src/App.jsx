@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AircraftMap from './components/AircraftMap'
+import HistoryOverlay from './components/HistoryOverlay'
 import { useAircraftData } from './hooks/useAircraftData'
 import { useAircraftTracks } from './hooks/useAircraftTracks'
 import { useFilteredAircraft } from './hooks/useFilteredAircraft'
@@ -39,6 +40,14 @@ function App() {
   const [selectedIcao24, setSelectedIcao24] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
   const settingsRef = useRef(null)
+  const [showHistory, setShowHistory] = useState(false)
+  const historyButtonRef = useRef(null)
+
+  // The history view is a layer over the map; closing it hands focus back to its button
+  const closeHistory = useCallback(() => {
+    setShowHistory(false)
+    historyButtonRef.current?.focus()
+  }, [])
 
   // Theme management
   const { themePreference, appliedTheme, setTheme } = useTheme()
@@ -122,7 +131,27 @@ function App() {
 
           <div className="settings" ref={settingsRef}>
             <button
-              className={`settings-button ${showSettings ? 'open' : ''}`}
+              ref={historyButtonRef}
+              className={`toolbar-button ${showHistory ? 'open' : ''}`}
+              onClick={() => {
+                setShowSettings(false)
+                setShowHistory(true)
+              }}
+              aria-label="Show history"
+              aria-expanded={showHistory}
+            >
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="1.75"
+                  d="M3 12a9 9 0 1 0 3-6.7M3 4v4.5h4.5M12 7v5l3.5 2"
+                />
+              </svg>
+            </button>
+
+            <button
+              className={`toolbar-button settings-gear ${showSettings ? 'open' : ''}`}
               onClick={() => setShowSettings(!showSettings)}
               aria-label={showSettings ? 'Hide settings' : 'Show settings'}
               aria-expanded={showSettings}
@@ -281,6 +310,7 @@ function App() {
           theme={appliedTheme}
         />
       </main>
+      {showHistory && <HistoryOverlay onClose={closeHistory} />}
     </div>
   )
 }

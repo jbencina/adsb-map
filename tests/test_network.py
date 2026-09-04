@@ -385,3 +385,46 @@ def test_handle_messages_survives_purge_failure(test_db):
     assert len(attempts) == 1  # a failure does not turn into a retry on every batch
     with test_db.get_session() as session:
         assert session.query(Aircraft).filter_by(icao24="4840d6").count() == 1
+
+
+def _patched_client_handle(client, messages):
+    with patch("pyModeS.crc", return_value=0):
+        with patch("pyModeS.df", return_value=17):
+            with patch("pyModeS.icao", return_value="4840D6"):
+                with patch("pyModeS.adsb.typecode", return_value=1):
+                    with patch("pyModeS.adsb.callsign", return_value="TEST123"):
+                        client.handle_messages(messages)
+
+
+def test_handle_messages_records_traffic_aggregates(test_db):
+    """Each batch adds to the per-minute and per-aircraft-hour traffic tables."""
+    from adsb.models import AircraftHourly, TrafficMinute
+    from adsb.traffic import hour_of, minute_of
+
+    client = ADSBNetworkClient(host="localhost", port=30005, rawtype="beast", database=test_db)
+    ts = 1_788_556_190.4
+    _patched_client_handle(client, [("8D4840D6202CC371C32CE0576098", ts)] * 3)
+    _patched_client_handle(client, [("8D4840D6202CC371C32CE0576098", ts + 1)])
+
+    with test_db.get_session() as session:
+        minute = session.get(TrafficMinute, minute_of(ts))
+        assert (minute.messages, minute.aircraft) == (4, 1)
+        aircraft = session.query(Aircraft).filter_by(icao24="4840d6").one()
+        hourly = session.get(AircraftHourly, (aircraft.id, hour_of(ts)))
+        assert hourly.messages == 4
+
+
+def test_handle_messages_purges_old_traffic_with_metadata(test_db):
+    """The once-a-minute housekeeping pass trims the traffic aggregates too."""
+    from adsb.models import TrafficMinute
+    from adsb.traffic import TRAFFIC_RETENTION, record_batch
+
+    client = ADSBNetworkClient(
+        host="localhost", port=30005, rawtype="beast", database=test_db, cleanup_interval=0
+    )
+    with test_db.get_session() as session:
+        record_batch(session, {60: (1, 1)}, {})
+    _patched_client_handle(client, [("8D4840D6202CC371C32CE0576098", time.time())])
+    with test_db.get_session() as session:
+        assert session.get(TrafficMinute, 60) is None
+        assert TRAFFIC_RETENTION > 0

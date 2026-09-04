@@ -13,3 +13,11 @@
  * @returns {boolean}
  */
 export const hasPosition = ac => typeof ac.latitude === 'number' && typeof ac.longitude === 'number'
+
+/**
+ * A callsign as the decoder stores it, minus the trailing `_` padding.
+ *
+ * @param {string|null|undefined} callsign - Raw callsign field
+ * @returns {string} Cleaned callsign, or '' when there is none
+ */
+export const cleanCallsign = callsign => (callsign || '').replace(/_+$/, '').trim()

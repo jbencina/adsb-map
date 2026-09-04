@@ -1,4 +1,5 @@
 import PropTypes from 'prop-types'
+import { cleanCallsign } from '../aircraft'
 import { formatCount, relativeTime } from '../stats'
 
 /**
@@ -25,7 +26,7 @@ function TopAircraftTable({ rows, now }) {
       </thead>
       <tbody>
         {rows.map((r, i) => {
-          const name = (r.callsign || '').trim() || r.registration || r.icao24.toUpperCase()
+          const name = cleanCallsign(r.callsign) || r.registration || r.icao24.toUpperCase()
           const detail = [r.registration, r.typecode].filter(d => d && d !== name).join(' · ')
           return (
             <tr key={r.icao24}>

@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import time
 
 import pytest
 
@@ -11,11 +12,11 @@ from adsb.models import Aircraft
 
 @pytest.fixture
 def sample_aircraft():
-    """Return a sample aircraft for testing."""
+    """Return a sample aircraft, seen just now so age filters keep it visible."""
     return Aircraft(
         icao24="abc123",
         firstseen=1234567890,
-        lastseen=1234567890,
+        lastseen=int(time.time()),
         callsign="TEST123",
         latitude=40.7,
         longitude=-74.0,

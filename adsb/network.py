@@ -120,9 +120,13 @@ class ADSBNetworkClient(TcpClient):
     database : Database
         Database instance for storing decoded data
     stale_timeout : int, optional
-        Seconds before removing stale aircraft, by default 60
-    cleanup_interval : int, optional
-        Seconds between cleanup runs, by default 30
+        Seconds of silence after which an aircraft heard again is a new contact
+        (see :class:`ADSBDecoder`), by default 60
+    lat_ref, lon_ref : float, optional
+        Receiver position for CPR decoding
+
+    Decoded data is only ever added: aircraft that stop transmitting stay in the
+    database for offline analysis, and the API hides them by age instead.
     """
 
     def __init__(
@@ -132,7 +136,6 @@ class ADSBNetworkClient(TcpClient):
         rawtype: str,
         database: Database,
         stale_timeout: int = 60,
-        cleanup_interval: int = 30,
         lat_ref: float | None = None,
         lon_ref: float | None = None,
     ):
@@ -140,10 +143,8 @@ class ADSBNetworkClient(TcpClient):
         super().__init__(host, port, rawtype)
         self.database = database
         self.stale_timeout = stale_timeout
-        self.cleanup_interval = cleanup_interval
         self.lat_ref = lat_ref
         self.lon_ref = lon_ref
-        self.last_cleanup = time.time()
         self._stop_event = threading.Event()
 
         # Written by the client thread, read by the status reporter thread.
@@ -266,14 +267,6 @@ class ADSBNetworkClient(TcpClient):
                 self.total_positions += batch["positions_decoded"]
                 self.total_aircraft |= batch["aircraft_seen"]
 
-            # Periodically cleanup stale aircraft
-            current_time = time.time()
-            if current_time - self.last_cleanup > self.cleanup_interval:
-                removed = decoder.cleanup_stale_aircraft()
-                if removed > 0:
-                    adsb_logger.debug(f"Cleaned up {removed} stale aircraft")
-                self.last_cleanup = current_time
-
     def stop(self):
         """Signal the client to stop gracefully."""
         self._stop_event.set()
@@ -302,7 +295,9 @@ def start_network_client(
     database : Database
         Database instance for storing decoded data
     stale_timeout : int, optional
-        Seconds before removing stale aircraft, by default 60
+        Seconds of silence after which an aircraft heard again is a new contact
+    lat_ref, lon_ref : float, optional
+        Receiver position for CPR decoding
 
     Returns
     -------

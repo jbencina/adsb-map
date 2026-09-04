@@ -45,7 +45,8 @@ See [Running on separate machines](#running-on-separate-machines).
 - **Aircraft enrichment** — automatic registration / type / description lookup from
   the [tar1090-db](https://github.com/wiedehopf/tar1090-db) project (566k+ records)
 - **REST API** — FastAPI endpoints under `/api/*`, jet1090-compatible
-- **SQLite storage** — aircraft state, position history, reception metadata
+- **SQLite storage** — aircraft state, position history, reception metadata; nothing is
+  purged while running, so the file doubles as a log for offline analysis
 - **Interactive map** — React + Mapbox GL, prebuilt and shipped in the wheel; signal-strength
   indicator per aircraft and an optional shade-by-signal view of the markers
 - **Separate services** — backend on the receiver, frontend on any machine that can reach it
@@ -60,7 +61,7 @@ Everything is a CLI argument except the Mapbox token. `.env` is for secrets only
 | **Backend** | | |
 | Bind host / port | `0.0.0.0` / `8000` | `adsb start backend --host --port` |
 | Database path | `./adsb.db` | `adsb start backend --db-path` |
-| Stale timeout | `60s` | `adsb start backend --stale-timeout` |
+| Stale timeout (default API window) | `60s` | `adsb start backend --stale-timeout` |
 | Receiver lat/lon | (none) | `adsb start backend --lat --lon` (recommended) |
 | Aircraft database | per-user data dir | `--aircraft-db PATH` on `start backend`, `download`, `decode` |
 | Status line interval | `10s` | `adsb start backend --stats-interval` (`0` disables) |
@@ -100,7 +101,7 @@ adsb start frontend …   # map UI, proxying to a backend (--api-url URL, or --d
 adsb download           # download tar1090-db aircraft database (--force to refresh)
 adsb init-db            # create SQLite tables
 adsb decode HEX         # decode a single message and store it
-adsb cleanup            # remove aircraft not seen in --stale-timeout
+adsb cleanup            # purge aircraft not seen in --stale-timeout (manual; never automatic)
 adsb db-size            # show DB file size and row counts
 ```
 
@@ -113,11 +114,16 @@ paths (proxied) plus the map itself.
 
 | Endpoint | Returns |
 |---|---|
-| `GET /api/all` | All current aircraft state vectors |
-| `GET /api/icao24` | List of ICAO24 addresses currently tracked |
+| `GET /api/all?max_age={seconds}` | Aircraft state vectors seen within `max_age` (default: `--stale-timeout`) |
+| `GET /api/icao24?max_age={seconds}` | ICAO24 addresses seen within `max_age` (default: `--stale-timeout`) |
 | `GET /api/track?icao24={icao24}&since={ts}` | Trajectory for one aircraft |
 | `GET /api/sensors` | Receiver/sensor info (serials) |
 | `GET /api` | API discovery (welcome JSON) |
+
+The backend never deletes what it has decoded. `--stale-timeout` only sets the default
+`max_age` window, so the map's "max age" slider can reach back through everything the
+database holds, and the SQLite file stays complete for offline analysis. Run `adsb cleanup`
+yourself if you ever want to reclaim space.
 | `GET /docs` | Interactive OpenAPI docs (backend) |
 | `GET /` | Backend: same discovery JSON as `/api`. Frontend: the map |
 | `GET /config.js` | Runtime config shim exposing `MAPBOX_TOKEN` to the SPA (frontend only) |

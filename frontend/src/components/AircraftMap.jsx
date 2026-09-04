@@ -17,6 +17,7 @@ import {
   AIRCRAFT_GLYPH,
   SIGNAL_COLORS,
 } from '../constants'
+import { hasPosition } from '../aircraft'
 import { aircraftRssi, signalColor, signalLevel } from '../signal'
 import AircraftTags from './AircraftTags'
 import SignalBars from './SignalBars'
@@ -60,7 +61,7 @@ function AircraftMap({
   useEffect(() => {
     if (!hasInitialized && aircraft.length > 0 && mapRef.current) {
       // Calculate center of all aircraft
-      const validAircraft = aircraft.filter(a => a.latitude && a.longitude)
+      const validAircraft = aircraft.filter(hasPosition)
       if (validAircraft.length > 0) {
         const avgLat = validAircraft.reduce((sum, a) => sum + a.latitude, 0) / validAircraft.length
         const avgLon = validAircraft.reduce((sum, a) => sum + a.longitude, 0) / validAircraft.length
@@ -138,11 +139,13 @@ function AircraftMap({
    */
   const formatRssi = rssi => rssi.toFixed(1).replace('-', '\u2212')
 
-  // Fetch detailed track when an aircraft is selected
+  // Fetch detailed track when an aircraft is selected, bounded to the same age
+  // window as the aircraft list so past flights of a regular visitor stay out of it
   useEffect(() => {
     if (selectedAircraft) {
       setLoadingTrack(true)
-      fetchAircraftTrack(selectedAircraft.icao24)
+      const since = Math.floor(Date.now() / 1000) - maxAgeMinutes * 60
+      fetchAircraftTrack(selectedAircraft.icao24, since)
         .then(trackData => {
           setSelectedAircraftTrack(trackData)
           setLoadingTrack(false)
@@ -162,10 +165,10 @@ function AircraftMap({
         onTrackingAircraft(false)
       }
     }
-  }, [selectedAircraft, onTrackingAircraft])
+  }, [selectedAircraft, onTrackingAircraft, maxAgeMinutes])
 
   // Filter aircraft with valid positions
-  const validAircraft = useMemo(() => aircraft.filter(a => a.latitude && a.longitude), [aircraft])
+  const validAircraft = useMemo(() => aircraft.filter(hasPosition), [aircraft])
 
   // The selection is a snapshot from click time; the card reads the live record so it keeps
   // updating, and falls back to the snapshot once the aircraft has aged out of the list

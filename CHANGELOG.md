@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The backend no longer purges stale aircraft.** Previously anything not seen within
+  `--stale-timeout` was deleted every 30 seconds, taking its positions and reception
+  metadata with it, so the map's "max age" slider could never reach past the last minute
+  and the database was useless for offline analysis. Aircraft are now retained forever and
+  `/api/all` and `/api/icao24` filter by age instead, via a new `max_age` query parameter
+  (seconds) that defaults to `--stale-timeout`. The map passes its slider value through
+  and refetches when it changes, so dragging it older brings aircraft back. `adsb cleanup`
+  remains as an explicit, manual purge and gained `--stale-timeout`. An aircraft heard
+  again after more than `--stale-timeout` of silence is a new contact: its previous
+  flight's position, callsign and velocity are cleared before the new frame is applied,
+  so a Mode-S-only reply cannot republish a stale position. Selecting an aircraft fetches
+  its track bounded to the map's age window (`since`), not its whole retained history.
+- The header's aircraft count now counts what the map draws. Mode-S-only aircraft (no
+  position) are tracked but invisible, and with the wider age window they were inflating
+  the number well past the markers on screen.
+- The "Max age" and "Refresh interval" boxes no longer snap to "0" when cleared (which
+  then read back as "020" as you typed), and partially typed or out-of-range values are
+  never applied, so the map keeps polling with the last valid setting until you finish.
+
 ### Fixed
 - **Aircraft enrichment was silently broken on every `pip install`.** `adsb download`
   wrote `./data/aircraft.csv` relative to the working directory, while the loader read

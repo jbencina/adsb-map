@@ -50,7 +50,19 @@ def test_tracked_counts(test_db):
         session.add(
             Aircraft(icao24="b", firstseen=now, lastseen=now, count=1, latitude=1.0, longitude=2.0)
         )
-    assert tracked_counts(test_db) == (2, 1)
+        # Retained for offline analysis, but no longer "tracked"
+        session.add(
+            Aircraft(
+                icao24="c",
+                firstseen=now - 900,
+                lastseen=now - 600,
+                count=1,
+                latitude=1.0,
+                longitude=2.0,
+            )
+        )
+    assert tracked_counts(test_db, max_age=60) == (2, 1)
+    assert tracked_counts(test_db, max_age=3600) == (3, 2)
 
 
 def test_format_status_without_feed():

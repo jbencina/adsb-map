@@ -17,15 +17,11 @@ def test_network_client_initialization(test_db):
         port=30005,
         rawtype="beast",
         database=test_db,
-        stale_timeout=60,
-        cleanup_interval=30,
         lat_ref=40.7,
         lon_ref=-74.0,
     )
 
     assert client.database == test_db
-    assert client.stale_timeout == 60
-    assert client.cleanup_interval == 30
     assert client.lat_ref == 40.7
     assert client.lon_ref == -74.0
 
@@ -99,18 +95,15 @@ def test_handle_messages_invalid_length(test_db):
         assert count == 0
 
 
-def test_handle_messages_with_cleanup(test_db):
-    """Test message handling with periodic cleanup."""
+def test_handle_messages_keeps_stale_aircraft(test_db):
+    """Aircraft that age out are retained for offline analysis, never deleted."""
     client = ADSBNetworkClient(
         host="localhost",
         port=30005,
         rawtype="beast",
         database=test_db,
-        stale_timeout=1,
-        cleanup_interval=0,  # Force cleanup every time
     )
 
-    # Create old aircraft
     with test_db.get_session() as session:
         old_aircraft = Aircraft(
             icao24="old123",
@@ -120,7 +113,6 @@ def test_handle_messages_with_cleanup(test_db):
         )
         session.add(old_aircraft)
 
-    # Process a message (should trigger cleanup)
     messages = [
         ("8D4840D6202CC371C32CE0576098", time.time()),
     ]
@@ -131,14 +123,8 @@ def test_handle_messages_with_cleanup(test_db):
                 with patch("pyModeS.adsb.typecode", return_value=1):
                     client.handle_messages(messages)
 
-    # Old aircraft should be removed
     with test_db.get_session() as session:
-        old = session.query(Aircraft).filter_by(icao24="old123").first()
-        assert old is None
-
-        # New aircraft should exist
-        new = session.query(Aircraft).filter_by(icao24="4840d6").first()
-        assert new is not None
+        assert {a.icao24 for a in session.query(Aircraft).all()} == {"old123", "4840d6"}
 
 
 def test_start_network_client(test_db):
@@ -150,7 +136,6 @@ def test_start_network_client(test_db):
             port="30005",
             rawtype="beast",
             database=test_db,
-            stale_timeout=60,
             lat_ref=40.7,
             lon_ref=-74.0,
         )
@@ -211,46 +196,6 @@ def test_handle_empty_messages(test_db):
         count = session.query(Aircraft).count()
         assert count == 0
 
-
-def test_network_client_cleanup_interval(test_db):
-    """Test that cleanup doesn't run too frequently."""
-    client = ADSBNetworkClient(
-        host="localhost",
-        port=30005,
-        rawtype="beast",
-        database=test_db,
-        stale_timeout=60,
-        cleanup_interval=100,  # Long interval
-    )
-
-    # Create old aircraft
-    with test_db.get_session() as session:
-        old_aircraft = Aircraft(
-            icao24="old123",
-            firstseen=int(time.time()) - 200,
-            lastseen=int(time.time()) - 200,
-            count=1,
-        )
-        session.add(old_aircraft)
-
-    # Process a message (should NOT trigger cleanup due to interval)
-    messages = [
-        ("8D4840D6202CC371C32CE0576098", time.time()),
-    ]
-
-    with patch("pyModeS.crc", return_value=0):
-        with patch("pyModeS.df", return_value=17):
-            with patch("pyModeS.icao", return_value="4840D6"):
-                with patch("pyModeS.adsb.typecode", return_value=1):
-                    client.handle_messages(messages)
-
-    # Old aircraft should still exist (cleanup didn't run)
-    with test_db.get_session() as session:
-        old = session.query(Aircraft).filter_by(icao24="old123").first()
-        assert old is not None
-
-
-# --- Beast frame parsing / RSSI -------------------------------------------
 
 LONG_MSG = "8D4840D6202CC371C32CE0576098"  # DF17, 14 bytes
 SHORT_MSG = "5D484BA898F8C6"  # DF11, 7 bytes

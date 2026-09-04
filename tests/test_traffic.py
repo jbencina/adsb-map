@@ -89,6 +89,17 @@ def test_backfill_is_a_no_op_when_aggregates_exist(test_db, aircraft):
         assert session.query(TrafficMinute).count() == 1
 
 
+def test_backfill_skips_metadata_older_than_retention(test_db, aircraft):
+    now = 1_788_556_200.0
+    with test_db.get_session() as session:
+        add_metadata(session, aircraft.id, [now - TRAFFIC_RETENTION - 60, now - 30])
+    with test_db.get_session() as session:
+        assert backfill_traffic(session, now=now) is True
+    with test_db.get_session() as session:
+        assert [r.minute for r in session.query(TrafficMinute)] == [minute_of(now - 30)]
+        assert session.query(AircraftHourly).count() == 1
+
+
 def test_backfill_is_a_no_op_without_metadata(test_db):
     with test_db.get_session() as session:
         assert backfill_traffic(session) is False

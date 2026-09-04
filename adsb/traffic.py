@@ -90,30 +90,36 @@ def purge_traffic(
     return removed
 
 
-def backfill_traffic(session: Session) -> bool:
+def backfill_traffic(session: Session, now: float | None = None) -> bool:
     """
     Seed empty aggregates from whatever reception metadata is still retained.
 
     Runs once at backend start so an upgraded install shows its last hour of
-    history straight away instead of an empty chart. Returns True if it wrote.
+    history straight away instead of an empty chart. Only metadata within
+    ``TRAFFIC_RETENTION`` is read, since anything older would be purged on the
+    first housekeeping pass anyway. Returns True if it wrote.
     """
     if session.execute(select(TrafficMinute.minute).limit(1)).first() is not None:
         return False
     if session.execute(select(func.count()).select_from(AircraftMetadata)).scalar() == 0:
         return False
+    cutoff = (time.time() if now is None else now) - TRAFFIC_RETENTION
     session.execute(
         text(
             "INSERT INTO traffic_minutes (minute, messages, aircraft) "
             "SELECT (CAST(system_timestamp AS INTEGER) / 60) * 60, COUNT(*), "
-            "COUNT(DISTINCT aircraft_id) FROM aircraft_metadata GROUP BY 1"
-        )
+            "COUNT(DISTINCT aircraft_id) FROM aircraft_metadata "
+            "WHERE system_timestamp >= :cutoff GROUP BY 1"
+        ),
+        {"cutoff": cutoff},
     )
     session.execute(
         text(
             "INSERT INTO aircraft_hourly (aircraft_id, hour, messages) "
             "SELECT aircraft_id, (CAST(system_timestamp AS INTEGER) / 3600) * 3600, COUNT(*) "
-            "FROM aircraft_metadata GROUP BY 1, 2"
-        )
+            "FROM aircraft_metadata WHERE system_timestamp >= :cutoff GROUP BY 1, 2"
+        ),
+        {"cutoff": cutoff},
     )
     return True
 

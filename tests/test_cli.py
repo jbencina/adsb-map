@@ -88,6 +88,41 @@ def test_download_skips_when_already_present(tmp_path):
     assert existing.read_text().startswith("abc123")
 
 
+def test_download_help_names_source_and_license():
+    """`adsb download --help` says where the data comes from and under what terms."""
+    result = CliRunner().invoke(main, ["download", "--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "Mictronics" in result.output
+    assert "tar1090-db" in result.output
+    assert "ODC-By" in result.output
+
+
+def test_download_prints_attribution_notice(tmp_path, monkeypatch):
+    """A fresh download ends with the ODC-By notice so the credit is seen at least once."""
+    import gzip
+    import io
+
+    payload = gzip.compress(b"a00001;N1;C172;;CESSNA 172;\n")
+
+    class FakeResponse(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.close()
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout: FakeResponse(payload))
+    dest = tmp_path / "aircraft.csv"
+
+    result = CliRunner().invoke(main, ["download", "--aircraft-db", str(dest)])
+
+    assert result.exit_code == 0, result.output
+    assert dest.read_bytes() == b"a00001;N1;C172;;CESSNA 172;\n"
+    assert "Mictronics aircraft database" in result.output
+    assert "Open Data Commons Attribution License" in result.output
+
+
 def test_loader_reads_the_path_download_writes(tmp_path):
     """Writer and reader resolve to the same file -- the pip-install enrichment bug."""
     from adsb.aircraft_db import AircraftDatabase, aircraft_db_path, set_aircraft_db_path

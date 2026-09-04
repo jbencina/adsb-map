@@ -1,7 +1,6 @@
 import { useRef, useEffect, useState, useMemo } from 'react'
 import PropTypes from 'prop-types'
 import Map, { Marker, Source, Layer } from 'react-map-gl'
-import { fetchAircraftTrack } from '../services/api'
 import {
   DEFAULT_MAP_CENTER,
   INITIAL_ZOOM,
@@ -16,9 +15,11 @@ import {
   SELECTED_TRACK_WIDTH,
   AIRCRAFT_GLYPH,
   SIGNAL_COLORS,
+  AIRCRAFT_DB_CREDIT,
 } from '../constants'
 import { hasPosition } from '../aircraft'
 import { aircraftRssi, signalColor, signalLevel } from '../signal'
+import { useContinuousHeadings } from '../hooks/useContinuousHeadings'
 import AircraftTags from './AircraftTags'
 import SignalBars from './SignalBars'
 import './AircraftMap.css'
@@ -29,10 +30,12 @@ import './AircraftMap.css'
  * @param {Object} props - Component props
  * @param {Array} props.aircraft - Array of aircraft objects from the API
  * @param {string} props.mapboxToken - MapBox API token
- * @param {Object} props.tracks - Map of icao24 to array of position points
- * @param {boolean} props.showTracks - Whether to display tracks
+ * @param {Object} props.tracks - Map of icao24 to array of [lon, lat, timestamp] points
+ * @param {boolean} props.tracksLoaded - Whether `tracks` reflects at least one fetch
+ * @param {boolean} props.showTracks - Whether to display every aircraft's track
  * @param {boolean} props.showLabels - Whether to draw a callsign tag beside each aircraft
  * @param {boolean} props.shadeBySignal - Whether to colour each marker by its signal strength
+ * @param {Function} props.onSelectAircraft - Called with the selected icao24, or null
  * @param {string} props.theme - Current theme ('light' or 'dark')
  * @returns {JSX.Element} The map component
  */
@@ -40,17 +43,16 @@ function AircraftMap({
   aircraft,
   mapboxToken,
   tracks = {},
+  tracksLoaded = false,
   showTracks = false,
   showLabels = false,
   shadeBySignal = false,
   maxAgeMinutes = 5,
-  onTrackingAircraft,
+  onSelectAircraft,
   theme = 'light',
 }) {
   const mapRef = useRef(null)
   const [selectedAircraft, setSelectedAircraft] = useState(null)
-  const [selectedAircraftTrack, setSelectedAircraftTrack] = useState(null)
-  const [loadingTrack, setLoadingTrack] = useState(false)
   const [viewport, setViewport] = useState(DEFAULT_MAP_CENTER)
   const [mapInstance, setMapInstance] = useState(null)
 
@@ -79,15 +81,16 @@ function AircraftMap({
   }, [aircraft.length, hasInitialized])
 
   /**
-   * Get the rotation angle for the aircraft icon based on track
-   * Aircraft track is 0° for north, 90° for east, etc.
-   * The marker glyph points up (north) by default, so the track maps directly to rotation
+   * Get the rotation for an aircraft glyph
+   * Track is 0° for north, 90° for east, etc., and the glyph points up (north) by default,
+   * so the angle maps directly to rotation. Callers pass the unwrapped heading rather than
+   * the raw track so the CSS transition turns the short way across north.
    *
-   * @param {number} track - Aircraft track in degrees
+   * @param {number|null} heading - Unwrapped heading in degrees
    * @returns {string} CSS transform string
    */
-  const getAircraftRotation = track => {
-    return track !== null && track !== undefined ? `rotate(${track}deg)` : 'rotate(0deg)'
+  const getAircraftRotation = heading => {
+    return heading !== null && heading !== undefined ? `rotate(${heading}deg)` : 'rotate(0deg)'
   }
 
   /**
@@ -139,36 +142,11 @@ function AircraftMap({
    */
   const formatRssi = rssi => rssi.toFixed(1).replace('-', '\u2212')
 
-  // Fetch detailed track when an aircraft is selected, bounded to the same age
-  // window as the aircraft list so past flights of a regular visitor stay out of it
-  useEffect(() => {
-    if (selectedAircraft) {
-      setLoadingTrack(true)
-      const since = Math.floor(Date.now() / 1000) - maxAgeMinutes * 60
-      fetchAircraftTrack(selectedAircraft.icao24, since)
-        .then(trackData => {
-          setSelectedAircraftTrack(trackData)
-          setLoadingTrack(false)
-          // Notify parent that we're tracking an aircraft
-          if (onTrackingAircraft) {
-            onTrackingAircraft(true)
-          }
-        })
-        .catch(error => {
-          console.error('Error fetching aircraft track:', error)
-          setLoadingTrack(false)
-        })
-    } else {
-      setSelectedAircraftTrack(null)
-      // Notify parent that we're no longer tracking
-      if (onTrackingAircraft) {
-        onTrackingAircraft(false)
-      }
-    }
-  }, [selectedAircraft, onTrackingAircraft, maxAgeMinutes])
-
   // Filter aircraft with valid positions
   const validAircraft = useMemo(() => aircraft.filter(hasPosition), [aircraft])
+
+  // Rotation that only ever turns the short way, so headings crossing north do not spin
+  const headings = useContinuousHeadings(validAircraft)
 
   // The selection is a snapshot from click time; the card reads the live record so it keeps
   // updating, and falls back to the snapshot once the aircraft has aged out of the list
@@ -178,6 +156,16 @@ function AircraftMap({
   )
   const selectedRssi = selected ? aircraftRssi(selected) : null
   const selectedSignal = signalLevel(selectedRssi)
+  const selectedIcao24 = selected?.icao24 ?? null
+
+  // The parent polls track lines while something draws them, so tell it what is selected
+  useEffect(() => {
+    if (onSelectAircraft) onSelectAircraft(selectedIcao24)
+  }, [selectedIcao24, onSelectAircraft])
+
+  // The selected aircraft's line is the same data as the overview, just highlighted
+  const selectedTrack = selectedIcao24 ? (tracks[selectedIcao24] ?? null) : null
+  const loadingTrack = selectedIcao24 !== null && !tracksLoaded
 
   // Select map style and track colors based on theme
   const isDark = theme === 'dark'
@@ -219,19 +207,7 @@ function AircraftMap({
    * Memoized to avoid recalculating on every render
    */
   const selectedTrackLineGeoJSON = useMemo(() => {
-    if (!selectedAircraftTrack || selectedAircraftTrack.length < 2) {
-      return {
-        type: 'FeatureCollection',
-        features: [],
-      }
-    }
-
-    // Convert track positions to coordinates [lon, lat]
-    const coordinates = selectedAircraftTrack
-      .filter(pos => pos.longitude !== null && pos.latitude !== null)
-      .map(pos => [pos.longitude, pos.latitude])
-
-    if (coordinates.length < 2) {
+    if (!selectedTrack || selectedTrack.length < 2) {
       return {
         type: 'FeatureCollection',
         features: [],
@@ -243,22 +219,22 @@ function AircraftMap({
       features: [
         {
           type: 'Feature',
-          properties: { icao24: selectedAircraft?.icao24 },
+          properties: { icao24: selectedIcao24 },
           geometry: {
             type: 'LineString',
-            coordinates,
+            coordinates: selectedTrack.map(p => [p[0], p[1]]),
           },
         },
       ],
     }
-  }, [selectedAircraftTrack, selectedAircraft])
+  }, [selectedTrack, selectedIcao24])
 
   /**
    * Convert selected aircraft track to GeoJSON Points for the dots
    * Memoized to avoid recalculating on every render
    */
   const selectedTrackPointsGeoJSON = useMemo(() => {
-    if (!selectedAircraftTrack || selectedAircraftTrack.length === 0) {
+    if (!selectedTrack || selectedTrack.length === 0) {
       return {
         type: 'FeatureCollection',
         features: [],
@@ -266,26 +242,20 @@ function AircraftMap({
     }
 
     // Create a Point feature for each position
-    const features = selectedAircraftTrack
-      .filter(pos => pos.longitude !== null && pos.latitude !== null)
-      .map((pos, index) => ({
-        type: 'Feature',
-        properties: {
-          icao24: selectedAircraft?.icao24,
-          timestamp: pos.timestamp,
-          index,
-        },
-        geometry: {
-          type: 'Point',
-          coordinates: [pos.longitude, pos.latitude],
-        },
-      }))
+    const features = selectedTrack.map(([lon, lat, timestamp], index) => ({
+      type: 'Feature',
+      properties: { icao24: selectedIcao24, timestamp, index },
+      geometry: {
+        type: 'Point',
+        coordinates: [lon, lat],
+      },
+    }))
 
     return {
       type: 'FeatureCollection',
       features,
     }
-  }, [selectedAircraftTrack, selectedAircraft])
+  }, [selectedTrack, selectedIcao24])
 
   if (!mapboxToken) {
     return (
@@ -306,8 +276,8 @@ function AircraftMap({
         mapStyle={mapStyle}
         onLoad={e => setMapInstance(e.target)}
       >
-        {/* Render all aircraft tracks (only when not showing selected aircraft track) */}
-        {showTracks && !selectedAircraftTrack && (
+        {/* Every aircraft's track; the selected one is drawn again on top, highlighted */}
+        {showTracks && (
           <Source id="aircraft-tracks" type="geojson" data={tracksGeoJSON}>
             <Layer
               id="tracks-layer"
@@ -322,7 +292,7 @@ function AircraftMap({
         )}
 
         {/* Render selected aircraft detailed track */}
-        {selectedAircraftTrack && (
+        {selectedTrack && (
           <>
             {/* Track line */}
             <Source
@@ -404,7 +374,7 @@ function AircraftMap({
                   fill ? 'shaded' : '',
                 ].join(' ')}
                 style={{
-                  transform: getAircraftRotation(ac.track),
+                  transform: getAircraftRotation(headings[ac.icao24]),
                   ...(fill && { '--marker-fill': fill }),
                 }}
                 title={[
@@ -538,7 +508,10 @@ function AircraftMap({
 
               <div className="info-group">
                 <div className="info-section-title">Flight</div>
-                <div className="info-row">
+                <div
+                  className="info-row"
+                  title="Ground track from the latest velocity report; the line on the map is drawn from position reports, so the two can differ slightly"
+                >
                   <span className="label">Track</span>
                   <span className="value">
                     {selected.track !== null && selected.track !== undefined && (
@@ -546,7 +519,9 @@ function AircraftMap({
                         className="heading"
                         viewBox="0 0 12 12"
                         aria-hidden="true"
-                        style={{ transform: `rotate(${selected.track}deg)` }}
+                        style={{
+                          transform: `rotate(${headings[selected.icao24] ?? selected.track}deg)`,
+                        }}
                       >
                         <path d="M6 1.5v9M2.5 5L6 1.5 9.5 5" />
                       </svg>
@@ -580,8 +555,21 @@ function AircraftMap({
                 )}
               </div>
 
-              {selectedAircraftTrack && (
-                <p className="track-footnote">{selectedAircraftTrack.length} track points</p>
+              {selectedTrack && (
+                <p className="track-footnote">
+                  {selectedTrack.length} track points in the last {maxAgeMinutes} min
+                </p>
+              )}
+              {tracksLoaded && !selectedTrack && (
+                <p className="track-footnote">No positions in the last {maxAgeMinutes} min</p>
+              )}
+              {(selected.registration || selected.typecode || selected.type_description) && (
+                <p className="track-footnote credit">
+                  Registration and type: {AIRCRAFT_DB_CREDIT.text}{' '}
+                  <a href={AIRCRAFT_DB_CREDIT.url} target="_blank" rel="noreferrer">
+                    {AIRCRAFT_DB_CREDIT.license}
+                  </a>
+                </p>
               )}
             </div>
           </>
@@ -628,21 +616,23 @@ AircraftMap.propTypes = {
   ).isRequired,
   mapboxToken: PropTypes.string.isRequired,
   tracks: PropTypes.objectOf(PropTypes.arrayOf(PropTypes.arrayOf(PropTypes.number))),
+  tracksLoaded: PropTypes.bool,
   showTracks: PropTypes.bool,
   showLabels: PropTypes.bool,
   shadeBySignal: PropTypes.bool,
   maxAgeMinutes: PropTypes.number,
-  onTrackingAircraft: PropTypes.func,
+  onSelectAircraft: PropTypes.func,
   theme: PropTypes.oneOf(['light', 'dark']),
 }
 
 AircraftMap.defaultProps = {
   tracks: {},
+  tracksLoaded: false,
   showTracks: false,
   showLabels: false,
   shadeBySignal: false,
   maxAgeMinutes: 5,
-  onTrackingAircraft: null,
+  onSelectAircraft: null,
   theme: 'light',
 }
 

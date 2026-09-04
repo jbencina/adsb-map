@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Aircraft markers spun in place on some heading changes** (#14). The marker's
+  rotation is CSS-animated from the raw track, so a report crossing north (359° to 1°)
+  played as a 358° turn the long way round. Each marker now keeps a continuous heading
+  that only ever moves by the shortest turn, and the detail card's arrow follows it.
+- **The overview tracks and the selected aircraft's track disagreed** (#16). The
+  overview was built in the browser from whatever the poll happened to see since the
+  page opened, thinned to one point per 100 m, while a click fetched the stored history
+  from `/api/track` once and then let the marker fly on ahead of it. There is now one
+  source: a new `/api/tracks` endpoint returns every aircraft's stored positions in the
+  window, the map seeds from it and polls it incrementally (`since`), and the selected
+  aircraft's line is the same data highlighted. Tracks are no longer hidden, and the
+  switch no longer disabled, while an aircraft is selected.
 - **`/api/all` took seconds after an overnight run.** With nothing ever purged, the
   endpoint was running one unindexed `ORDER BY ... LIMIT 4` query per aircraft against
   `aircraft_metadata`, each a full scan and sort of every reception row ever stored
@@ -21,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source table is trimmed to that window.
 
 ### Added
+- Attribution for the aircraft database (#17). The registration / type data is the
+  Mictronics aircraft database under ODC-By 1.0, fetched via the tar1090-db mirror. The
+  credit now appears in the map's detail card, in the `/api` discovery document
+  (`aircraft_db`), at the end of `adsb download` and in its `--help`, with the policy
+  written up in the README and `data/README.md`.
 - `--metadata-retention SECONDS` on `start backend` / `start all` (default 3600, 0 to
   disable): the decoder deletes reception metadata older than this once a minute.
   Aircraft and positions are still never deleted; metadata is only ever shown for live
@@ -29,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decoder's commits. Expect `adsb.db-wal` and `adsb.db-shm` next to the database.
 
 ### Changed
+- The map only polls `/api/tracks` while "Show tracks" is on or an aircraft is
+  selected, and the detail card's Track row explains that the angle is the reported
+  ground track rather than something derived from the line (#16).
 - **The backend no longer purges stale aircraft.** Previously anything not seen within
   `--stale-timeout` was deleted every 30 seconds, taking its positions and reception
   metadata with it, so the map's "max age" slider could never reach past the last minute

@@ -12,6 +12,32 @@ from platformdirs import user_data_dir
 
 logger = logging.getLogger(__name__)
 
+#: Where `adsb download` fetches the CSV. tar1090-db is a distribution mirror: it
+#: repackages the Mictronics aircraft database (plus a few community merges) as a
+#: single gzipped CSV. The data itself is Mictronics' and carries its licence, so
+#: credit stays with the upstream source rather than the mirror.
+AIRCRAFT_DB_URL = "https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz"
+
+#: Provenance of the registration / type data, surfaced by `adsb download`, the
+#: `/api` discovery document, and the map's detail card. The frontend keeps its own
+#: copy in `AIRCRAFT_DB_CREDIT` (frontend/src/constants.js); change both together.
+AIRCRAFT_DB_ATTRIBUTION = {
+    "source": "Mictronics aircraft database",
+    "source_url": "https://www.mictronics.de/aircraft-database/",
+    "license": "ODC-By 1.0",
+    "license_url": "https://opendatacommons.org/licenses/by/1-0/",
+    "distributed_by": "wiedehopf/tar1090-db",
+    "distributed_by_url": "https://github.com/wiedehopf/tar1090-db",
+}
+
+#: One-line notice suitable for terminal output and docs.
+AIRCRAFT_DB_NOTICE = (
+    "Aircraft registration and type data: Mictronics aircraft database "
+    f"({AIRCRAFT_DB_ATTRIBUTION['source_url']}), Open Data Commons Attribution "
+    f"License v1.0 ({AIRCRAFT_DB_ATTRIBUTION['license_url']}), distributed via "
+    f"{AIRCRAFT_DB_ATTRIBUTION['distributed_by']}."
+)
+
 #: Location set by `--aircraft-db` on the CLI; None means the per-user default.
 _configured_path: Path | None = None
 

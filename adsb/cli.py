@@ -11,7 +11,12 @@ import uvicorn
 from dotenv import find_dotenv, load_dotenv
 
 from adsb import __version__
-from adsb.aircraft_db import aircraft_db_path, set_aircraft_db_path
+from adsb.aircraft_db import (
+    AIRCRAFT_DB_NOTICE,
+    AIRCRAFT_DB_URL,
+    aircraft_db_path,
+    set_aircraft_db_path,
+)
 from adsb.api import create_app
 from adsb.database import Database
 from adsb.decoder import DEFAULT_METADATA_RETENTION, ADSBDecoder
@@ -19,7 +24,6 @@ from adsb.network import start_network_client
 from adsb.status import StatusReporter
 from adsb.ui import DEFAULT_API_URL, create_ui_app
 
-AIRCRAFT_DB_URL = "https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz"
 DATEFMT = "%Y-%m-%d %H:%M:%S"
 SHUTDOWN_TIMEOUT = 10  # seconds to let a service finish its own shutdown
 
@@ -714,11 +718,16 @@ def db_size(db_path: str):
 @aircraft_db_option
 def download(force: bool):
     """
-    Download the aircraft database from tar1090-db.
+    Download the aircraft database (Mictronics, via tar1090-db).
 
-    Downloads the latest aircraft database (566k+ records) from the
-    tar1090-db repository. The database maps ICAO24 addresses to
-    aircraft registration, type code, and descriptions.
+    Downloads the latest aircraft database (566k+ records) as published by
+    the tar1090-db repository, which mirrors the Mictronics aircraft
+    database. The database maps ICAO24 addresses to aircraft registration,
+    type code, and descriptions.
+
+    The data is licensed under the Open Data Commons Attribution License
+    (ODC-By) v1.0: keep the Mictronics credit with anything you build or
+    publish from it. `adsb` shows it in the map's detail card and at /api.
 
     Stored in a per-user data directory so it is found no matter which
     directory `adsb start backend` runs from. Override with --aircraft-db (pass the
@@ -743,7 +752,7 @@ def download(force: bool):
     # never leaves a truncated CSV where the loader would find it.
     tmp = dest.with_name(dest.name + ".partial")
 
-    click.echo("Downloading aircraft database from tar1090-db...")
+    click.echo("Downloading aircraft database (Mictronics, via tar1090-db)...")
     click.echo(f"Source: {AIRCRAFT_DB_URL}")
 
     try:
@@ -764,6 +773,7 @@ def download(force: bool):
     click.echo(f"Location: {dest}")
     click.echo(f"Size: {dest.stat().st_size / 1024 / 1024:.1f} MB")
     click.echo(f"Records: {record_count:,}")
+    click.echo(f"\n{AIRCRAFT_DB_NOTICE}")
 
 
 if __name__ == "__main__":

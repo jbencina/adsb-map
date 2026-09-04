@@ -32,18 +32,17 @@ export async function fetchAllAircraft(maxAgeSeconds) {
 }
 
 /**
- * Fetches track history for a specific aircraft
+ * Fetches the stored positions of every aircraft since a timestamp
  *
- * Positions are retained indefinitely, so the window matters: without it a
- * regular visitor's track would join every past flight into one line.
+ * The one source for track lines on the map. Positions are retained
+ * indefinitely, so the first call bounds `since` to the age window; later
+ * calls pass the newest timestamp held and get only what is new.
  *
- * @param {string} icao24 - Aircraft ICAO24 identifier
  * @param {number} sinceSeconds - Unix timestamp; only positions at or after it
- * @returns {Promise<Array>} Array of track position objects
+ * @returns {Promise<Object>} icao24 to array of position objects, oldest first
  * @throws {Error} If the API request fails
  */
-export async function fetchAircraftTrack(icao24, sinceSeconds) {
-  if (fleet) return fleet.track(icao24, sinceSeconds)
-  const params = new URLSearchParams({ icao24, since: sinceSeconds })
-  return getJson(`/api/track?${params}`)
+export async function fetchAircraftTracks(sinceSeconds) {
+  if (fleet) return fleet.tracks(sinceSeconds)
+  return getJson(`/api/tracks?since=${encodeURIComponent(sinceSeconds)}`)
 }

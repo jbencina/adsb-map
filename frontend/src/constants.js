@@ -28,10 +28,6 @@ export const MAP_STYLE_DARK = 'mapbox://styles/mapbox/dark-v11'
 // Legacy export for backwards compatibility
 export const MAP_STYLE = MAP_STYLE_LIGHT
 
-// Track Configuration
-export const MAX_TRACK_POINTS = 500
-export const TRACK_MIN_DISTANCE_CHANGE = 0.001 // ~100 meters in degrees
-
 // Track Display Configuration
 // Light and dark map styles need different blues to hold the same contrast
 export const TRACK_COLOR = '#0071e3'
@@ -71,3 +67,12 @@ export const SIGNAL_RANGE_MIN = -36
 export const SIGNAL_RANGE_MAX = -8
 // Weak to strong colour stops, evenly spaced across the range (blended in OKLab)
 export const SIGNAL_COLORS = ['#ff3b30', '#ff9500', '#34c759']
+
+// Credit for the registration / type enrichment shown in the detail card. The data is
+// the Mictronics aircraft database (ODC-By 1.0), fetched by `adsb download` from the
+// tar1090-db mirror; keep this in step with AIRCRAFT_DB_ATTRIBUTION in adsb/aircraft_db.py.
+export const AIRCRAFT_DB_CREDIT = {
+  text: 'Mictronics aircraft database via tar1090-db,',
+  license: 'ODC-By 1.0',
+  url: 'https://opendatacommons.org/licenses/by/1-0/',
+}

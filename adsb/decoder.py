@@ -4,12 +4,18 @@ import logging
 import time
 
 import pyModeS as pms
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from adsb.aircraft_db import get_database
 from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
 
 logger = logging.getLogger(__name__)
+
+# Reception metadata (RSSI, receiver serial) is only shown for live aircraft, so the
+# running backend keeps a rolling window of it. Seconds.
+DEFAULT_METADATA_RETENTION = 3600
+METADATA_PURGE_INTERVAL = 60
 
 
 class ADSBDecoder:
@@ -26,8 +32,8 @@ class ADSBDecoder:
     stale_timeout : int, optional
         Seconds of silence after which an aircraft heard again is a new contact: its
         previous flight's live state is cleared before the new frame is applied
-        (rows are never deleted automatically). Also the cutoff for the manual
-        ``adsb cleanup`` command via :meth:`cleanup_stale_aircraft`. By default 60.
+        (aircraft rows are never deleted automatically). Also the cutoff for the
+        manual ``adsb cleanup`` command via :meth:`cleanup_stale_aircraft`. By default 60.
     """
 
     def __init__(
@@ -407,3 +413,32 @@ class ADSBDecoder:
         # Flush to make deletions effective, but commit is handled by context manager
         self.session.flush()
         return count
+
+    def purge_old_metadata(self, retention: int, now: float | None = None) -> int:
+        """
+        Delete reception metadata older than ``retention`` seconds.
+
+        One bulk DELETE. The table only ever holds the retention window, so
+        filtering on ``system_timestamp`` needs no index.
+
+        Parameters
+        ----------
+        retention : int
+            Window in seconds; 0 or less keeps everything
+        now : float, optional
+            Reference time, by default the current time (injectable for tests)
+
+        Returns
+        -------
+        int
+            Number of rows deleted
+        """
+        if retention <= 0:
+            return 0
+        cutoff = (time.time() if now is None else now) - retention
+        result = self.session.execute(
+            delete(AircraftMetadata)
+            .where(AircraftMetadata.system_timestamp < cutoff)
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount

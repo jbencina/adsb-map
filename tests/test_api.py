@@ -6,8 +6,16 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from adsb.api import create_app, get_db
+from adsb.api import (
+    MAX_METADATA_RECORDS,
+    aircraft_since_stmt,
+    create_app,
+    get_db,
+    latest_metadata_stmt,
+    track_stmt,
+)
 from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
+from tests.helpers import add_metadata, query_plan, statements_containing
 
 
 @pytest.fixture
@@ -313,3 +321,85 @@ def test_backend_has_no_cors(client):
     response = client.get("/api", headers={"Origin": "http://localhost:3000"})
     assert response.status_code == 200
     assert "access-control-allow-origin" not in response.headers
+
+
+def test_all_metadata_is_newest_first_and_capped(test_session, client):
+    """Each aircraft carries its newest MAX_METADATA_RECORDS rows, newest first."""
+    now = int(time.time())
+    a1 = Aircraft(icao24="aaa111", firstseen=now, lastseen=now, count=1)
+    a2 = Aircraft(icao24="bbb222", firstseen=now, lastseen=now, count=1)
+    old = Aircraft(icao24="old333", firstseen=now - 900, lastseen=now - 900, count=1)
+    test_session.add_all([a1, a2, old])
+    test_session.flush()
+    add_metadata(test_session, a1.id, [now - 3, now - 5, now - 1, now - 6, now - 2, now - 4])
+    add_metadata(test_session, a2.id, [now - 7, now - 8])
+    add_metadata(test_session, old.id, [now - 1])  # newest row of all, but out of window
+    test_session.commit()
+
+    data = client.get("/api/all?max_age=300").json()
+
+    by_icao = {a["icao24"]: [m["system_timestamp"] for m in a["metadata"]] for a in data}
+    assert set(by_icao) == {"aaa111", "bbb222"}
+    assert by_icao["aaa111"] == [now - 1, now - 2, now - 3, now - 4]
+    assert len(by_icao["aaa111"]) == MAX_METADATA_RECORDS
+    assert by_icao["bbb222"] == [now - 7, now - 8]
+
+
+def test_all_metadata_ties_break_on_newest_row(test_session, client):
+    """Frames from one socket read share a timestamp; the latest-inserted rows must win."""
+    now = int(time.time())
+    a = Aircraft(icao24="tie111", firstseen=now, lastseen=now, count=1)
+    test_session.add(a)
+    test_session.flush()
+    add_metadata(test_session, a.id, [now - 1.0] * 6)
+    test_session.commit()
+
+    data = client.get("/api/all?max_age=300").json()
+
+    assert [m["nanoseconds"] for m in data[0]["metadata"]] == [5, 4, 3, 2]
+
+
+def test_all_uses_bounded_number_of_queries(test_db, test_session, client):
+    """Regression: /api/all once ran one unindexed metadata query per aircraft.
+
+    On an overnight database (2M metadata rows, 75 aircraft in the window) that
+    took 7 seconds per poll. The metadata must come from a single statement.
+    """
+    now = int(time.time())
+    aircraft = [
+        Aircraft(icao24=f"ac{i:04d}", firstseen=now, lastseen=now, count=1) for i in range(5)
+    ]
+    test_session.add_all(aircraft)
+    test_session.flush()
+    for i, a in enumerate(aircraft):
+        # Interleave timestamps across aircraft so "newest" is not "highest id".
+        add_metadata(test_session, a.id, [now - 1000 + j * 5 + i for j in range(10)])
+    test_session.commit()
+
+    with statements_containing(test_db.engine, "aircraft_metadata") as seen:
+        response = client.get("/api/all?max_age=300")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 5
+    for a in data:
+        assert [m["nanoseconds"] for m in a["metadata"]] == [9, 8, 7, 6]
+    assert len(seen) == 1, seen
+
+
+@pytest.mark.parametrize(
+    ("stmt", "index"),
+    [
+        # An ORDER BY id on this one once made SQLite scan every aircraft ever seen.
+        (aircraft_since_stmt(cutoff=0), "ix_aircraft_lastseen"),
+        (latest_metadata_stmt(cutoff=0), "ix_aircraft_metadata_aircraft_id_system_timestamp"),
+        (track_stmt(aircraft_id=1, since=0), "ix_aircraft_positions_aircraft_id_timestamp"),
+    ],
+    ids=["aircraft_since", "latest_metadata", "track"],
+)
+def test_hot_statements_seek_their_index(test_db, stmt, index):
+    """The statements behind /api/all and /api/track must seek, never scan, a table."""
+    plan = query_plan(test_db.engine, stmt)
+
+    assert any(index in step for step in plan), plan
+    assert not any(step.startswith("SCAN ") for step in plan), plan

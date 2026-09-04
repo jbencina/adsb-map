@@ -8,7 +8,8 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Query
-from sqlalchemy.orm import Session
+from sqlalchemy import Select, select
+from sqlalchemy.orm import Session, aliased
 
 from adsb import __version__
 from adsb.database import Database
@@ -72,6 +73,59 @@ def get_session():
     database = get_db()
     with database.get_session() as session:
         yield session
+
+
+def aircraft_since_stmt(cutoff: int) -> Select:
+    """
+    Aircraft last seen at or after ``cutoff``, via the ``lastseen`` index.
+
+    Deliberately unordered: an ``ORDER BY id`` makes SQLite drop the index and
+    scan every aircraft ever seen, and callers attach data by id anyway.
+    """
+    return select(Aircraft).where(Aircraft.lastseen >= cutoff)
+
+
+def latest_metadata_stmt(cutoff: int) -> Select:
+    """
+    Newest ``MAX_METADATA_RECORDS`` metadata rows for every aircraft seen since ``cutoff``.
+
+    One statement: a correlated top-N subquery per aircraft, each a seek on the
+    ``(aircraft_id, system_timestamp)`` index, so the cost is O(aircraft in
+    window) regardless of how much history the table holds. A window function
+    would read every row of every in-window aircraft instead.
+
+    Rows come back newest first. Frames parsed from one socket read share a
+    timestamp, so ``id`` breaks ties.
+    """
+    t = aliased(AircraftMetadata)
+    latest_ids = (
+        select(t.id)
+        .where(t.aircraft_id == Aircraft.id)
+        .order_by(t.system_timestamp.desc(), t.id.desc())
+        .limit(MAX_METADATA_RECORDS)
+        .correlate(Aircraft)
+        .scalar_subquery()
+    )
+    return (
+        select(AircraftMetadata)
+        .join(Aircraft, AircraftMetadata.id.in_(latest_ids))
+        .where(Aircraft.lastseen >= cutoff)
+        .order_by(AircraftMetadata.system_timestamp.desc(), AircraftMetadata.id.desc())
+    )
+
+
+def track_stmt(aircraft_id: int, since: int | None) -> Select:
+    """
+    One aircraft's positions since ``since`` (all of them if None), oldest first.
+
+    Seeks the ``(aircraft_id, timestamp)`` index, which also supplies the order.
+    Positions are retained forever, so the global timestamp index alone would
+    walk every aircraft's points since the cutoff.
+    """
+    stmt = select(AircraftPosition).where(AircraftPosition.aircraft_id == aircraft_id)
+    if since is not None:
+        stmt = stmt.where(AircraftPosition.timestamp >= since)
+    return stmt.order_by(AircraftPosition.timestamp)
 
 
 def create_app(
@@ -155,8 +209,10 @@ def create_app(
         """
         Get all currently tracked aircraft.
 
-        Nothing is ever purged, so widening ``max_age`` brings back aircraft that
-        have aged out of the default window.
+        Aircraft are never purged, so widening ``max_age`` brings back aircraft
+        that have aged out of the default window. Reception metadata is only kept
+        for the backend's ``--metadata-retention`` window, so aircraft older than
+        that come back with an empty ``metadata`` list.
 
         Parameters
         ----------
@@ -170,21 +226,16 @@ def create_app(
         list[AircraftStateSchema]
             List of aircraft state vectors
         """
-        aircraft_list = (
-            session.query(Aircraft).filter(Aircraft.lastseen >= seen_since(max_age)).all()
-        )
+        cutoff = seen_since(max_age)
+        aircraft_list = session.execute(aircraft_since_stmt(cutoff)).scalars().all()
+
+        # One statement for everyone's newest metadata, not one per aircraft.
+        by_aircraft: dict[int, list[AircraftMetadata]] = {}
+        for m in session.execute(latest_metadata_stmt(cutoff)).scalars():
+            by_aircraft.setdefault(m.aircraft_id, []).append(m)
 
         result = []
         for aircraft in aircraft_list:
-            # Get limited metadata (last N messages)
-            reception_metadata = (
-                session.query(AircraftMetadata)
-                .filter_by(aircraft_id=aircraft.id)
-                .order_by(AircraftMetadata.system_timestamp.desc())
-                .limit(MAX_METADATA_RECORDS)
-                .all()
-            )
-
             aircraft_dict = {
                 "icao24": aircraft.icao24,
                 "firstseen": aircraft.firstseen,
@@ -215,7 +266,7 @@ def create_app(
                         "rssi": m.rssi,
                         "serial": m.serial,
                     }
-                    for m in reception_metadata
+                    for m in by_aircraft.get(aircraft.id, [])
                 ],
             }
             result.append(AircraftStateSchema(**aircraft_dict))
@@ -274,12 +325,7 @@ def create_app(
         if aircraft is None:
             return []
 
-        query = session.query(AircraftPosition).filter_by(aircraft_id=aircraft.id)
-
-        if since is not None:
-            query = query.filter(AircraftPosition.timestamp >= since)
-
-        positions = query.order_by(AircraftPosition.timestamp).all()
+        positions = session.execute(track_stmt(aircraft.id, since)).scalars().all()
 
         return [
             TrackPointSchema(
@@ -294,7 +340,11 @@ def create_app(
     @app.get("/api/sensors", response_model=list[SensorSchema])
     async def get_sensors(session: Session = Depends(get_session)):
         """
-        Get information about all sensors/receivers.
+        Get information about recently active sensors/receivers.
+
+        Serials come from reception metadata, which the backend trims to its
+        ``--metadata-retention`` window (an hour by default), so a receiver that
+        has been silent longer than that drops off this list.
 
         Parameters
         ----------

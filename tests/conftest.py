@@ -115,9 +115,10 @@ def test_db():
     finally:
         # Dispose of the engine to close all connections
         database.dispose()
-        # Clean up the temporary database file
-        if os.path.exists(db_path):
-            os.unlink(db_path)
+        # Clean up the temporary database file and its WAL sidecars
+        for path in (db_path, db_path + "-wal", db_path + "-shm"):
+            if os.path.exists(path):
+                os.unlink(path)
 
 
 @pytest.fixture

@@ -9,7 +9,7 @@ import pyModeS as pms
 from pyModeS.extra.tcpclient import TcpClient
 
 from adsb.database import Database
-from adsb.decoder import ADSBDecoder
+from adsb.decoder import DEFAULT_METADATA_RETENTION, METADATA_PURGE_INTERVAL, ADSBDecoder
 
 # Separate logger for ADSB data processing (different from API requests)
 adsb_logger = logging.getLogger("adsb.data")
@@ -124,9 +124,15 @@ class ADSBNetworkClient(TcpClient):
         (see :class:`ADSBDecoder`), by default 60
     lat_ref, lon_ref : float, optional
         Receiver position for CPR decoding
+    metadata_retention : int, optional
+        Delete reception metadata older than this many seconds; 0 keeps it all.
+        By default ``DEFAULT_METADATA_RETENTION``
+    cleanup_interval : int, optional
+        Seconds between metadata purges, by default ``METADATA_PURGE_INTERVAL``
 
-    Decoded data is only ever added: aircraft that stop transmitting stay in the
-    database for offline analysis, and the API hides them by age instead.
+    Aircraft and their positions are only ever added: aircraft that stop
+    transmitting stay in the database for offline analysis, and the API hides
+    them by age instead. Reception metadata is trimmed to ``metadata_retention``.
     """
 
     def __init__(
@@ -138,6 +144,8 @@ class ADSBNetworkClient(TcpClient):
         stale_timeout: int = 60,
         lat_ref: float | None = None,
         lon_ref: float | None = None,
+        metadata_retention: int = DEFAULT_METADATA_RETENTION,
+        cleanup_interval: int = METADATA_PURGE_INTERVAL,
     ):
         """Initialize network client."""
         super().__init__(host, port, rawtype)
@@ -145,6 +153,9 @@ class ADSBNetworkClient(TcpClient):
         self.stale_timeout = stale_timeout
         self.lat_ref = lat_ref
         self.lon_ref = lon_ref
+        self.metadata_retention = metadata_retention
+        self.cleanup_interval = cleanup_interval
+        self.last_cleanup = 0.0
         self._stop_event = threading.Event()
 
         # Written by the client thread, read by the status reporter thread.
@@ -250,10 +261,20 @@ class ADSBNetworkClient(TcpClient):
                     if result.latitude is not None and result.longitude is not None:
                         batch["positions_decoded"] += 1
 
+            # Trim reception metadata now and then; the decoder is a no-op at retention 0.
+            now = time.time()
+            if now - self.last_cleanup >= self.cleanup_interval:
+                self.last_cleanup = now
+                try:
+                    removed = decoder.purge_old_metadata(self.metadata_retention, now=now)
+                    adsb_logger.debug(f"Purged {removed} old metadata rows")
+                except Exception as e:  # housekeeping must never take the feed down
+                    adsb_logger.warning(f"Metadata purge failed, will retry: {e}")
+
             # One lock per batch rather than per message; the reporter only
             # needs a consistent view, not real-time updates.
             with self._lock:
-                self.last_message_at = time.time()
+                self.last_message_at = now
                 for key in (
                     "messages_received",
                     "messages_processed",
@@ -280,6 +301,7 @@ def start_network_client(
     stale_timeout: int = 60,
     lat_ref: float | None = None,
     lon_ref: float | None = None,
+    metadata_retention: int = DEFAULT_METADATA_RETENTION,
 ) -> ADSBNetworkClient:
     """
     Start network client in a background thread.
@@ -298,6 +320,8 @@ def start_network_client(
         Seconds of silence after which an aircraft heard again is a new contact
     lat_ref, lon_ref : float, optional
         Receiver position for CPR decoding
+    metadata_retention : int, optional
+        Delete reception metadata older than this many seconds; 0 keeps it all
 
     Returns
     -------
@@ -312,6 +336,7 @@ def start_network_client(
         stale_timeout=stale_timeout,
         lat_ref=lat_ref,
         lon_ref=lon_ref,
+        metadata_retention=metadata_retention,
     )
 
     # Run client in background thread as daemon

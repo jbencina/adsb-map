@@ -1,5 +1,7 @@
 """Tests for database models."""
 
+import pytest
+
 from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
 
 
@@ -48,3 +50,27 @@ def test_aircraft_with_metadata(test_session, aircraft):
     assert len(retrieved.reception_metadata) == 1
     assert retrieved.reception_metadata[0].rssi == -20.5
     assert retrieved.reception_metadata[0].serial == 123456
+
+
+@pytest.mark.parametrize(
+    ("model", "name", "columns"),
+    [
+        # /api/all fetches the newest few metadata rows per aircraft.
+        (
+            AircraftMetadata,
+            "ix_aircraft_metadata_aircraft_id_system_timestamp",
+            ["aircraft_id", "system_timestamp"],
+        ),
+        # Every max_age filter is `lastseen >= cutoff`.
+        (Aircraft, "ix_aircraft_lastseen", ["lastseen"]),
+        # /api/track filters one aircraft's positions by time; positions are kept forever.
+        (
+            AircraftPosition,
+            "ix_aircraft_positions_aircraft_id_timestamp",
+            ["aircraft_id", "timestamp"],
+        ),
+    ],
+)
+def test_query_indexes_declared(model, name, columns):
+    declared = {ix.name: [c.name for c in ix.columns] for ix in model.__table__.indexes}
+    assert declared[name] == columns

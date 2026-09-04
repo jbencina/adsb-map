@@ -6,8 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
+from adsb.decoder import ADSBDecoder
 from adsb.models import Aircraft, AircraftMetadata
 from adsb.network import ADSBNetworkClient, beast_signal_to_dbfs, start_network_client
+from tests.helpers import add_metadata, statements_containing
 
 
 def test_network_client_initialization(test_db):
@@ -207,8 +209,10 @@ def beast_frame(msgtype: int, data_hex: str, signal: int = 0x80) -> bytes:
     return b"\x1a" + body.replace(b"\x1a", b"\x1a\x1a")
 
 
-def make_client(test_db):
-    return ADSBNetworkClient(host="localhost", port=30005, rawtype="beast", database=test_db)
+def make_client(test_db, **kwargs):
+    return ADSBNetworkClient(
+        host="localhost", port=30005, rawtype="beast", database=test_db, **kwargs
+    )
 
 
 def test_read_beast_buffer_long_frame_keeps_rssi(test_db):
@@ -318,3 +322,66 @@ def test_read_beast_buffer_survives_any_split(test_db, split):
 
     assert [(row[0], row[2]) for row in rows] == [(ESCAPED_MSG, beast_signal_to_dbfs(0x1A))]
     assert client.buffer == []
+
+
+def seed_old_metadata(test_db, age_seconds):
+    with test_db.get_session() as session:
+        aircraft = Aircraft(icao24="old123", firstseen=1, lastseen=1, count=1)
+        session.add(aircraft)
+        session.flush()
+        add_metadata(session, aircraft.id, [time.time() - age_seconds])
+
+
+def metadata_ages(test_db):
+    with test_db.get_session() as session:
+        now = time.time()
+        return sorted(now - m.system_timestamp for m in session.query(AircraftMetadata).all())
+
+
+def test_handle_messages_purges_metadata_older_than_retention(test_db):
+    """Old reception metadata is trimmed as messages arrive; the fresh row stays."""
+    seed_old_metadata(test_db, age_seconds=7200)
+    client = make_client(test_db, metadata_retention=3600, cleanup_interval=0)
+
+    client.handle_messages([(LONG_MSG, time.time(), -12.5)])
+
+    ages = metadata_ages(test_db)
+    assert len(ages) == 1 and ages[0] < 60
+
+
+def test_handle_messages_retention_zero_never_purges(test_db):
+    seed_old_metadata(test_db, age_seconds=7200)
+    client = make_client(test_db, metadata_retention=0, cleanup_interval=0)
+
+    client.handle_messages([(LONG_MSG, time.time(), -12.5)])
+
+    assert len(metadata_ages(test_db)) == 2
+
+
+def test_handle_messages_purges_once_per_cleanup_interval(test_db):
+    """The purge is a table-wide DELETE, so it must not run on every batch."""
+    client = make_client(test_db, metadata_retention=3600, cleanup_interval=3600)
+
+    with statements_containing(test_db.engine, "DELETE FROM aircraft_metadata") as deletes:
+        client.handle_messages([(LONG_MSG, time.time(), -12.5)])
+        client.handle_messages([(LONG_MSG, time.time(), -12.5)])
+
+    assert len(deletes) == 1
+
+
+def test_handle_messages_survives_purge_failure(test_db):
+    """A failing purge must not take the feed down, and must wait for the next interval."""
+    client = make_client(test_db, metadata_retention=3600, cleanup_interval=3600)
+    attempts = []
+
+    def boom(self, retention, now=None):
+        attempts.append(now)
+        raise RuntimeError("database is locked")
+
+    with patch.object(ADSBDecoder, "purge_old_metadata", boom):
+        client.handle_messages([(LONG_MSG, time.time(), -12.5)])
+        client.handle_messages([(LONG_MSG, time.time(), -12.5)])
+
+    assert len(attempts) == 1  # a failure does not turn into a retry on every batch
+    with test_db.get_session() as session:
+        assert session.query(Aircraft).filter_by(icao24="4840d6").count() == 1

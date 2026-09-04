@@ -14,7 +14,7 @@ from adsb import __version__
 from adsb.aircraft_db import aircraft_db_path, set_aircraft_db_path
 from adsb.api import create_app
 from adsb.database import Database
-from adsb.decoder import ADSBDecoder
+from adsb.decoder import DEFAULT_METADATA_RETENTION, ADSBDecoder
 from adsb.network import start_network_client
 from adsb.status import StatusReporter
 from adsb.ui import DEFAULT_API_URL, create_ui_app
@@ -96,9 +96,19 @@ def feed_options(f):
             help=(
                 "Seconds of silence after which an aircraft is hidden from /api/all (unless the "
                 "caller asks for a wider max_age) and, if heard again, treated as a new contact. "
-                "Nothing is deleted; use `adsb cleanup` to purge."
+                "Aircraft are never deleted; use `adsb cleanup` to purge."
             ),
             show_default=True,
+        ),
+        click.option(
+            "--metadata-retention",
+            default=DEFAULT_METADATA_RETENTION,
+            show_default=True,
+            metavar="SECONDS",
+            help=(
+                "Delete reception metadata (RSSI, receiver serial) older than this while "
+                "running; 0 keeps everything. Aircraft and positions are never deleted."
+            ),
         ),
         click.option(
             "--lat",
@@ -157,6 +167,7 @@ def _build_backend(
     lon: float,
     stats_interval: int,
     access_log: bool,
+    metadata_retention: int,
 ):
     """Configure logging, open the database, start the decoder, build the API app.
 
@@ -233,6 +244,8 @@ def _build_backend(
             )
             click.echo("Use --lat and --lon options to provide receiver location.")
 
+        retained = f"{metadata_retention}s" if metadata_retention > 0 else "forever"
+        click.echo(f"Reception metadata retained: {retained}")
         click.echo("Starting network decoder in background...")
 
         # Start network client in background thread
@@ -244,6 +257,7 @@ def _build_backend(
             stale_timeout=stale_timeout,
             lat_ref=lat,
             lon_ref=lon,
+            metadata_retention=metadata_retention,
         )
         click.echo("Network decoder started successfully")
 
@@ -292,6 +306,7 @@ def backend(
     lon: float,
     stats_interval: int,
     access_log: bool,
+    metadata_retention: int,
     reload: bool,
 ):
     """
@@ -320,6 +335,7 @@ def backend(
         lon=lon,
         stats_interval=stats_interval,
         access_log=access_log,
+        metadata_retention=metadata_retention,
     )
 
     # uvicorn handles signals and triggers the FastAPI lifespan shutdown.
@@ -439,6 +455,7 @@ def all_(
     lon: float,
     stats_interval: int,
     access_log: bool,
+    metadata_retention: int,
 ):
     """
     Start the backend and the map UI together.
@@ -466,6 +483,7 @@ def all_(
         lon=lon,
         stats_interval=stats_interval,
         access_log=access_log,
+        metadata_retention=metadata_retention,
     )
     frontend_app = _build_frontend(_proxy_url(host, backend_port), demo=False)
 
@@ -617,8 +635,8 @@ def cleanup(db_path: str, stale_timeout: int):
     """
     Purge stale aircraft from the database.
 
-    The running backend never deletes anything, so the database can be analysed
-    offline. Run this only when you want to reclaim space.
+    The running backend never deletes aircraft or positions, so the database can
+    be analysed offline. Run this only when you want to reclaim space.
     """
     database = Database(db_path)
 

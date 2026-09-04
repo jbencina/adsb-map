@@ -5,7 +5,6 @@ that proxies to this one, so nothing here serves HTML, static files or CORS.
 """
 
 import time
-from collections import defaultdict
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Query
@@ -76,24 +75,24 @@ def get_session():
         yield session
 
 
-def latest_metadata_stmt(cutoff: int, limit: int = MAX_METADATA_RECORDS) -> Select:
+def latest_metadata_stmt(cutoff: int) -> Select:
     """
-    Newest ``limit`` metadata rows for every aircraft seen since ``cutoff``, in one statement.
+    Newest ``MAX_METADATA_RECORDS`` metadata rows for every aircraft seen since ``cutoff``.
 
-    A correlated top-N subquery per aircraft: each one is a seek on the
-    ``(aircraft_id, system_timestamp)`` index reading ``limit`` rows, so the cost
-    is O(aircraft in window) regardless of how much history the table holds. A
-    window function would read every row of every in-window aircraft instead.
+    One statement: a correlated top-N subquery per aircraft, each a seek on the
+    ``(aircraft_id, system_timestamp)`` index, so the cost is O(aircraft in
+    window) regardless of how much history the table holds. A window function
+    would read every row of every in-window aircraft instead.
 
-    Rows come back grouped by aircraft, newest first within each group. Frames
-    parsed from one socket read share a timestamp, so ``id`` breaks ties.
+    Rows come back newest first. Frames parsed from one socket read share a
+    timestamp, so ``id`` breaks ties.
     """
     t = aliased(AircraftMetadata)
     latest_ids = (
         select(t.id)
         .where(t.aircraft_id == Aircraft.id)
         .order_by(t.system_timestamp.desc(), t.id.desc())
-        .limit(limit)
+        .limit(MAX_METADATA_RECORDS)
         .correlate(Aircraft)
         .scalar_subquery()
     )
@@ -101,11 +100,7 @@ def latest_metadata_stmt(cutoff: int, limit: int = MAX_METADATA_RECORDS) -> Sele
         select(AircraftMetadata)
         .join(Aircraft, AircraftMetadata.id.in_(latest_ids))
         .where(Aircraft.lastseen >= cutoff)
-        .order_by(
-            AircraftMetadata.aircraft_id,
-            AircraftMetadata.system_timestamp.desc(),
-            AircraftMetadata.id.desc(),
-        )
+        .order_by(AircraftMetadata.system_timestamp.desc(), AircraftMetadata.id.desc())
     )
 
 
@@ -222,14 +217,13 @@ def create_app(
             List of aircraft state vectors
         """
         cutoff = seen_since(max_age)
-        aircraft_list = (
-            session.query(Aircraft).filter(Aircraft.lastseen >= cutoff).order_by(Aircraft.id).all()
-        )
+        # No ORDER BY here: sorting by id makes SQLite drop the lastseen index.
+        aircraft_list = session.query(Aircraft).filter(Aircraft.lastseen >= cutoff).all()
 
         # One statement for everyone's newest metadata, not one per aircraft.
-        by_aircraft: dict[int, list[AircraftMetadata]] = defaultdict(list)
+        by_aircraft: dict[int, list[AircraftMetadata]] = {}
         for m in session.execute(latest_metadata_stmt(cutoff)).scalars():
-            by_aircraft[m.aircraft_id].append(m)
+            by_aircraft.setdefault(m.aircraft_id, []).append(m)
 
         result = []
         for aircraft in aircraft_list:

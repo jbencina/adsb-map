@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from adsb.decoder import ADSBDecoder
 from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
+from tests.helpers import add_metadata
 
 
 def test_decoder_initialization(test_session):
@@ -338,19 +339,11 @@ def test_brief_gap_keeps_current_state(test_session, mock_pymodes_df4):
     assert ac.altitude == 35000
 
 
-def seed_metadata(session, aircraft, timestamps):
-    for ts in timestamps:
-        session.add(
-            AircraftMetadata(aircraft_id=aircraft.id, system_timestamp=ts, nanoseconds=0, rssi=-9.0)
-        )
-    session.commit()
-
-
 def test_purge_old_metadata_deletes_only_rows_older_than_retention(test_session, aircraft):
     """Metadata older than the retention window goes; newer rows, aircraft and positions stay."""
     now = time.time()
-    seed_metadata(test_session, aircraft, [now - 7200 + i for i in range(5)])
-    seed_metadata(test_session, aircraft, [now - 300 + i for i in range(5)])
+    add_metadata(test_session, aircraft.id, [now - 7200 + i for i in range(5)])
+    add_metadata(test_session, aircraft.id, [now - 300 + i for i in range(5)])
     test_session.add(
         AircraftPosition(
             aircraft_id=aircraft.id, timestamp=int(now) - 7200, latitude=1, longitude=2
@@ -369,7 +362,7 @@ def test_purge_old_metadata_deletes_only_rows_older_than_retention(test_session,
 
 
 def test_purge_old_metadata_zero_retention_keeps_everything(test_session, aircraft):
-    seed_metadata(test_session, aircraft, [time.time() - 7200])
+    add_metadata(test_session, aircraft.id, [time.time() - 7200])
     decoder = ADSBDecoder(test_session)
 
     assert decoder.purge_old_metadata(retention=0) == 0

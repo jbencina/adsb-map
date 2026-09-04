@@ -68,6 +68,7 @@ Everything is a CLI argument except the Mapbox token. `.env` is for secrets only
 | Receiver lat/lon | (none) | `adsb start backend --lat --lon` (recommended) |
 | Aircraft database | per-user data dir | `--aircraft-db PATH` on `start backend`, `download`, `decode` |
 | Status line interval | `10s` | `adsb start backend --stats-interval` (`0` disables) |
+| Reception metadata retention | `3600s` | `adsb start backend --metadata-retention` (`0` keeps everything) |
 | HTTP access log | off | `adsb start backend --access-log` |
 | **Frontend** | | |
 | Backend URL | `http://127.0.0.1:8000` | `adsb start frontend --api-url` |
@@ -122,19 +123,19 @@ paths (proxied) plus the map itself.
 | `GET /api/track?icao24={icao24}&since={ts}` | Trajectory for one aircraft |
 | `GET /api/sensors` | Receiver/sensor serials heard within `--metadata-retention` |
 | `GET /api` | API discovery (welcome JSON) |
+| `GET /docs` | Interactive OpenAPI docs (backend) |
+| `GET /` | Backend: same discovery JSON as `/api`. Frontend: the map |
+| `GET /config.js` | Runtime config shim exposing `MAPBOX_TOKEN` to the SPA (frontend only) |
 
 The backend never deletes aircraft or their positions. `--stale-timeout` only sets the
 default `max_age` window, so the map's "max age" slider can reach back through everything
 the database holds, and the SQLite file stays complete for offline analysis. Run
 `adsb cleanup` yourself if you ever want to reclaim space. Per-message reception metadata
 (RSSI, receiver serial) is the exception: it is only shown for live aircraft, so the
-backend trims it to the last hour (`--metadata-retention SECONDS`, 0 to keep it all).
+backend trims it to a rolling window (`--metadata-retention`, 0 keeps everything).
 
 The database runs in SQLite WAL mode, so `adsb.db-wal` and `adsb.db-shm` alongside
 `adsb.db` are normal while the backend is running.
-| `GET /docs` | Interactive OpenAPI docs (backend) |
-| `GET /` | Backend: same discovery JSON as `/api`. Frontend: the map |
-| `GET /config.js` | Runtime config shim exposing `MAPBOX_TOKEN` to the SPA (frontend only) |
 
 The REST API is self-contained — you can ignore the map and build your own client
 (mobile, monitoring system, dashboard, etc.) against the backend's `/api/*`.

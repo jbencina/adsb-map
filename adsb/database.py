@@ -5,7 +5,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine, event, inspect
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.schema import CreateIndex
 
@@ -66,17 +66,15 @@ class Database:
         ``create_all`` leaves existing tables untouched, so a database created
         before an index was added to the models would never get it. There is no
         migration framework; this is the one schema change we need to apply.
-        Building an index on a large table takes a few seconds, once.
+        ``IF NOT EXISTS`` makes it a no-op when the index is already there and
+        safe if two processes start at once. Building an index on a large table
+        takes a few seconds, once.
         """
-        inspector = inspect(self.engine)
-        for table in Base.metadata.sorted_tables:
-            existing = {ix["name"] for ix in inspector.get_indexes(table.name)}
-            for index in table.indexes:
-                if index.name not in existing:
-                    logger.info("Creating index %s on %s", index.name, table.name)
-                    # IF NOT EXISTS: another process may have won the race since we looked.
-                    with self.engine.begin() as conn:
-                        conn.execute(CreateIndex(index, if_not_exists=True))
+        with self.engine.begin() as conn:
+            for table in Base.metadata.sorted_tables:
+                for index in table.indexes:
+                    logger.debug("Ensuring index %s on %s", index.name, table.name)
+                    conn.execute(CreateIndex(index, if_not_exists=True))
 
     def dispose(self) -> None:
         """Dispose of the connection pool and close all connections."""

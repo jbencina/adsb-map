@@ -4,9 +4,11 @@ from sqlalchemy import inspect, text
 
 from adsb.database import Database
 
+# Indexes added after the first release, which existing database files lack.
 NEW_INDEXES = {
     "aircraft": "ix_aircraft_lastseen",
     "aircraft_metadata": "ix_aircraft_metadata_aircraft_id_system_timestamp",
+    "aircraft_positions": "ix_aircraft_positions_aircraft_id_timestamp",
 }
 
 
@@ -50,21 +52,3 @@ def test_create_tables_is_idempotent(test_db):
     before = {t: index_names(test_db, t) for t in NEW_INDEXES}
     test_db.create_tables()
     assert {t: index_names(test_db, t) for t in NEW_INDEXES} == before
-    for table, name in NEW_INDEXES.items():
-        assert name in before[table]
-
-
-def test_ensure_indexes_tolerates_index_created_meanwhile(test_db, monkeypatch):
-    """Two processes starting at once must not fail on the second CREATE INDEX."""
-    import adsb.database
-
-    class BlindInspector:
-        def get_indexes(self, table):
-            return []
-
-    monkeypatch.setattr(adsb.database, "inspect", lambda engine: BlindInspector())
-
-    test_db.create_tables()  # indexes already exist; must not raise
-
-    for table, name in NEW_INDEXES.items():
-        assert name in index_names(test_db, table)

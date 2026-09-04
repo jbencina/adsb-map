@@ -1,5 +1,7 @@
 """Tests for database models."""
 
+import pytest
+
 from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
 
 
@@ -50,24 +52,25 @@ def test_aircraft_with_metadata(test_session, aircraft):
     assert retrieved.reception_metadata[0].serial == 123456
 
 
-def test_metadata_composite_index_declared():
-    """/api/all fetches the newest few metadata rows per aircraft; that needs this index."""
-    names = {index.name for index in AircraftMetadata.__table__.indexes}
-    assert "ix_aircraft_metadata_aircraft_id_system_timestamp" in names
-    index = next(
-        i
-        for i in AircraftMetadata.__table__.indexes
-        if i.name == "ix_aircraft_metadata_aircraft_id_system_timestamp"
-    )
-    assert [c.name for c in index.columns] == ["aircraft_id", "system_timestamp"]
-
-
-def test_aircraft_lastseen_index_declared():
-    """Every max_age filter is `lastseen >= cutoff`; it must not scan the table."""
-    assert "ix_aircraft_lastseen" in {index.name for index in Aircraft.__table__.indexes}
-
-
-def test_position_composite_index_declared():
-    """/api/track filters one aircraft's positions by time; positions are kept forever."""
-    names = {index.name for index in AircraftPosition.__table__.indexes}
-    assert "ix_aircraft_positions_aircraft_id_timestamp" in names
+@pytest.mark.parametrize(
+    ("model", "name", "columns"),
+    [
+        # /api/all fetches the newest few metadata rows per aircraft.
+        (
+            AircraftMetadata,
+            "ix_aircraft_metadata_aircraft_id_system_timestamp",
+            ["aircraft_id", "system_timestamp"],
+        ),
+        # Every max_age filter is `lastseen >= cutoff`.
+        (Aircraft, "ix_aircraft_lastseen", ["lastseen"]),
+        # /api/track filters one aircraft's positions by time; positions are kept forever.
+        (
+            AircraftPosition,
+            "ix_aircraft_positions_aircraft_id_timestamp",
+            ["aircraft_id", "timestamp"],
+        ),
+    ],
+)
+def test_query_indexes_declared(model, name, columns):
+    declared = {ix.name: [c.name for c in ix.columns] for ix in model.__table__.indexes}
+    assert declared[name] == columns

@@ -6,8 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
+from adsb.decoder import ADSBDecoder
 from adsb.models import Aircraft, AircraftMetadata
 from adsb.network import ADSBNetworkClient, beast_signal_to_dbfs, start_network_client
+from tests.helpers import add_metadata, statements_containing
 
 
 def test_network_client_initialization(test_db):
@@ -207,8 +209,10 @@ def beast_frame(msgtype: int, data_hex: str, signal: int = 0x80) -> bytes:
     return b"\x1a" + body.replace(b"\x1a", b"\x1a\x1a")
 
 
-def make_client(test_db):
-    return ADSBNetworkClient(host="localhost", port=30005, rawtype="beast", database=test_db)
+def make_client(test_db, **kwargs):
+    return ADSBNetworkClient(
+        host="localhost", port=30005, rawtype="beast", database=test_db, **kwargs
+    )
 
 
 def test_read_beast_buffer_long_frame_keeps_rssi(test_db):
@@ -325,11 +329,7 @@ def seed_old_metadata(test_db, age_seconds):
         aircraft = Aircraft(icao24="old123", firstseen=1, lastseen=1, count=1)
         session.add(aircraft)
         session.flush()
-        session.add(
-            AircraftMetadata(
-                aircraft_id=aircraft.id, system_timestamp=time.time() - age_seconds, nanoseconds=0
-            )
-        )
+        add_metadata(session, aircraft.id, [time.time() - age_seconds])
 
 
 def metadata_ages(test_db):
@@ -341,14 +341,7 @@ def metadata_ages(test_db):
 def test_handle_messages_purges_metadata_older_than_retention(test_db):
     """Old reception metadata is trimmed as messages arrive; the fresh row stays."""
     seed_old_metadata(test_db, age_seconds=7200)
-    client = ADSBNetworkClient(
-        host="localhost",
-        port=1,
-        rawtype="beast",
-        database=test_db,
-        metadata_retention=3600,
-        cleanup_interval=0,
-    )
+    client = make_client(test_db, metadata_retention=3600, cleanup_interval=0)
 
     client.handle_messages([(LONG_MSG, time.time(), -12.5)])
 
@@ -358,14 +351,7 @@ def test_handle_messages_purges_metadata_older_than_retention(test_db):
 
 def test_handle_messages_retention_zero_never_purges(test_db):
     seed_old_metadata(test_db, age_seconds=7200)
-    client = ADSBNetworkClient(
-        host="localhost",
-        port=1,
-        rawtype="beast",
-        database=test_db,
-        metadata_retention=0,
-        cleanup_interval=0,
-    )
+    client = make_client(test_db, metadata_retention=0, cleanup_interval=0)
 
     client.handle_messages([(LONG_MSG, time.time(), -12.5)])
 
@@ -374,44 +360,18 @@ def test_handle_messages_retention_zero_never_purges(test_db):
 
 def test_handle_messages_purges_once_per_cleanup_interval(test_db):
     """The purge is a table-wide DELETE, so it must not run on every batch."""
-    from sqlalchemy import event
+    client = make_client(test_db, metadata_retention=3600, cleanup_interval=3600)
 
-    client = ADSBNetworkClient(
-        host="localhost",
-        port=1,
-        rawtype="beast",
-        database=test_db,
-        metadata_retention=3600,
-        cleanup_interval=3600,
-    )
-    deletes = []
-
-    def spy(conn, cursor, statement, parameters, context, executemany):
-        if statement.startswith("DELETE FROM aircraft_metadata"):
-            deletes.append(statement)
-
-    event.listen(test_db.engine, "before_cursor_execute", spy)
-    try:
+    with statements_containing(test_db.engine, "DELETE FROM aircraft_metadata") as deletes:
         client.handle_messages([(LONG_MSG, time.time(), -12.5)])
         client.handle_messages([(LONG_MSG, time.time(), -12.5)])
-    finally:
-        event.remove(test_db.engine, "before_cursor_execute", spy)
 
     assert len(deletes) == 1
 
 
 def test_handle_messages_survives_purge_failure(test_db):
     """A failing purge must not take the decoder thread (and the feed) down with it."""
-    from adsb.decoder import ADSBDecoder
-
-    client = ADSBNetworkClient(
-        host="localhost",
-        port=1,
-        rawtype="beast",
-        database=test_db,
-        metadata_retention=3600,
-        cleanup_interval=0,
-    )
+    client = make_client(test_db, metadata_retention=3600, cleanup_interval=0)
 
     def boom(self, retention, now=None):
         raise RuntimeError("database is locked")

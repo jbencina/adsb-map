@@ -14,7 +14,7 @@ from adsb import __version__
 from adsb.aircraft_db import aircraft_db_path, set_aircraft_db_path
 from adsb.api import create_app
 from adsb.database import Database
-from adsb.decoder import ADSBDecoder
+from adsb.decoder import DEFAULT_METADATA_RETENTION, ADSBDecoder
 from adsb.network import start_network_client
 from adsb.status import StatusReporter
 from adsb.ui import DEFAULT_API_URL, create_ui_app
@@ -102,7 +102,7 @@ def feed_options(f):
         ),
         click.option(
             "--metadata-retention",
-            default=3600,
+            default=DEFAULT_METADATA_RETENTION,
             show_default=True,
             metavar="SECONDS",
             help=(
@@ -244,10 +244,8 @@ def _build_backend(
             )
             click.echo("Use --lat and --lon options to provide receiver location.")
 
-        if metadata_retention > 0:
-            click.echo(f"Reception metadata retained for {metadata_retention}s")
-        else:
-            click.echo("Reception metadata retained forever (--metadata-retention 0)")
+        retained = f"{metadata_retention}s" if metadata_retention > 0 else "forever"
+        click.echo(f"Reception metadata retained: {retained}")
         click.echo("Starting network decoder in background...")
 
         # Start network client in background thread

@@ -12,6 +12,11 @@ from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
 
 logger = logging.getLogger(__name__)
 
+# Reception metadata (RSSI, receiver serial) is only shown for live aircraft, so the
+# running backend keeps a rolling window of it. Seconds.
+DEFAULT_METADATA_RETENTION = 3600
+METADATA_PURGE_INTERVAL = 60
+
 
 class ADSBDecoder:
     """
@@ -413,10 +418,8 @@ class ADSBDecoder:
         """
         Delete reception metadata older than ``retention`` seconds.
 
-        Metadata (RSSI, receiver serial) is only ever shown for live aircraft, and
-        positions are stored separately, so keeping more than an hour of it just
-        makes the table grow without bound. One bulk DELETE; the table stays small
-        enough that filtering on ``system_timestamp`` needs no index.
+        One bulk DELETE. The table only ever holds the retention window, so
+        filtering on ``system_timestamp`` needs no index.
 
         Parameters
         ----------

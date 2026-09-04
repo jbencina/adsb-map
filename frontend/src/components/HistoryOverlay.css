@@ -298,4 +298,9 @@
   .chart-plot {
     height: 140px;
   }
+
+  /* Every third label; the full set collides at phone widths */
+  .chart-axis span:not(:nth-child(3n + 1)) {
+    display: none;
+  }
 }

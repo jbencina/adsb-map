@@ -1,7 +1,5 @@
 import PropTypes from 'prop-types'
-import { bucketRange, formatCount, niceMax, timeTicks } from '../stats'
-
-const GRID_STEPS = 4
+import { bucketRange, formatCount, gridValues, timeTicks } from '../stats'
 
 /**
  * One bar per bucket, heights as percentages of a rounded axis maximum.
@@ -15,10 +13,10 @@ const GRID_STEPS = 4
  * @param {string} props.unit - Noun for tooltips and the accessible label
  */
 function BarChart({ buckets, interval, valueKey, unit }) {
-  const max = niceMax(Math.max(0, ...buckets.map(b => b[valueKey])))
+  const grid = gridValues(Math.max(0, ...buckets.map(b => b[valueKey])))
+  const max = grid.at(-1)
   const total = buckets.reduce((sum, b) => sum + b[valueKey], 0)
   const ticks = timeTicks(buckets, interval)
-  const grid = Array.from({ length: GRID_STEPS + 1 }, (_, i) => (max / GRID_STEPS) * i)
   const label = `${unit} per ${interval >= 3600 ? 'hour' : `${interval / 60} minutes`} over the last day`
 
   return (

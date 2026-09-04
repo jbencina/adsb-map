@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { bucketRange, formatCount, niceMax, relativeTime, timeTicks } from './stats'
+import { bucketRange, formatCount, gridValues, niceMax, relativeTime, timeTicks } from './stats'
 
 describe('formatCount', () => {
   test('groups thousands below 10k and abbreviates above', () => {
@@ -12,14 +12,25 @@ describe('formatCount', () => {
 })
 
 describe('niceMax', () => {
-  test('rounds up to 1, 2 or 5 times a power of ten', () => {
+  test('rounds up to 1, 2, 3 or 5 times a power of ten', () => {
     expect(niceMax(0)).toBe(1)
     expect(niceMax(7)).toBe(10)
+    expect(niceMax(24)).toBe(30)
     expect(niceMax(95)).toBe(100)
     expect(niceMax(130)).toBe(200)
     expect(niceMax(430)).toBe(500)
     expect(niceMax(500)).toBe(500)
     expect(niceMax(12000)).toBe(20000)
+  })
+})
+
+describe('gridValues', () => {
+  test('lands gridlines on round numbers', () => {
+    expect(gridValues(0)).toEqual([0, 1])
+    expect(gridValues(24)).toEqual([0, 10, 20, 30])
+    expect(gridValues(95)).toEqual([0, 20, 40, 60, 80, 100])
+    expect(gridValues(130)).toEqual([0, 50, 100, 150, 200])
+    expect(gridValues(430)).toEqual([0, 100, 200, 300, 400, 500])
   })
 })
 

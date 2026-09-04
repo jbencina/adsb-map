@@ -202,7 +202,7 @@ export class DemoFleet {
       interval,
       aircraft_seen: size,
       buckets,
-      top_window: ranked.map(e => row(e, e.ac.count * 40)),
+      top_window: ranked.map((e, i) => row(e, e.ac.count * (40 - i * 2))),
       top_lifetime: ranked.map((e, i) => row(e, e.ac.count * (400 - i * 25))),
     }
   }

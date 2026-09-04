@@ -17,12 +17,27 @@ export function formatCount(n) {
   return `${(n / 1e6).toFixed(2).replace(/\.?0+$/, '')}M`
 }
 
-/** Smallest of 1, 2, 5 × 10^k that is at least `max`; 1 for empty data. */
+// Axis maxima are 1, 2, 3 or 5 × 10^k, each with a step count that keeps the
+// gridline labels round: 2/4/6/8/10, 5/10/15/20, 10/20/30, 10/20/30/40/50.
+const NICE = [
+  [1, 5],
+  [2, 4],
+  [3, 3],
+  [5, 5],
+  [10, 5],
+]
+
+/** Smallest of 1, 2, 3, 5 × 10^k that is at least `max`; 1 for empty data. */
 export function niceMax(max) {
-  if (!(max > 0)) return 1
+  return gridValues(max).at(-1)
+}
+
+/** Gridline values from 0 up to `niceMax(max)`, evenly spaced on round numbers. */
+export function gridValues(max) {
+  if (!(max > 0)) return [0, 1]
   const pow = 10 ** Math.floor(Math.log10(max))
-  for (const m of [1, 2, 5, 10]) if (m * pow >= max) return m * pow
-  return 10 * pow
+  const [m, steps] = NICE.find(([m]) => m * pow >= max)
+  return Array.from({ length: steps + 1 }, (_, i) => ((m * pow) / steps) * i)
 }
 
 // Seconds between x-axis labels for each bucket size; all divide a day evenly.

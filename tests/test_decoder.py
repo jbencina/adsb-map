@@ -283,3 +283,56 @@ def test_process_message_stores_rssi(test_session):
     )
 
     assert aircraft.reception_metadata[0].rssi == -12.5
+
+
+def _returning_aircraft(test_session, seconds_ago: int) -> Aircraft:
+    """An aircraft with a full previous-flight state, last heard ``seconds_ago``."""
+    now = int(time.time())
+    aircraft = Aircraft(
+        icao24="abc123",
+        firstseen=now - seconds_ago - 3600,
+        lastseen=now - seconds_ago,
+        count=7,
+        callsign="OLD123",
+        squawk="1200",
+        latitude=40.7,
+        longitude=-74.0,
+        altitude=10000,
+        groundspeed=250.0,
+        track=90.0,
+        registration="N12345",
+        typecode="B738",
+    )
+    test_session.add(aircraft)
+    test_session.flush()
+    return aircraft
+
+
+def test_returning_aircraft_drops_previous_flight_state(test_session, mock_pymodes_df4):
+    """A row retained past stale_timeout must not republish its old position on reactivation."""
+    decoder = ADSBDecoder(test_session, stale_timeout=60)
+    _returning_aircraft(test_session, seconds_ago=600)
+
+    decoder.process_message("20000000000000")  # DF4: altitude only, no position
+
+    ac = test_session.query(Aircraft).filter_by(icao24="abc123").first()
+    assert ac.latitude is None and ac.longitude is None
+    assert ac.callsign is None and ac.squawk is None
+    assert ac.groundspeed is None and ac.track is None
+    assert ac.altitude == 35000  # from the new frame
+    assert ac.lastseen >= int(time.time()) - 5
+    # Identity and history survive: enrichment is static and count is cumulative
+    assert ac.registration == "N12345" and ac.typecode == "B738"
+    assert ac.count == 8
+
+
+def test_brief_gap_keeps_current_state(test_session, mock_pymodes_df4):
+    """A dropout shorter than stale_timeout is the same contact; keep its state."""
+    decoder = ADSBDecoder(test_session, stale_timeout=60)
+    _returning_aircraft(test_session, seconds_ago=10)
+
+    decoder.process_message("20000000000000")
+
+    ac = test_session.query(Aircraft).filter_by(icao24="abc123").first()
+    assert ac.latitude == 40.7 and ac.callsign == "OLD123"
+    assert ac.altitude == 35000

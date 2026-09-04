@@ -24,8 +24,10 @@ class ADSBDecoder:
     session : Session
         SQLAlchemy database session
     stale_timeout : int, optional
-        Age in seconds used by :meth:`cleanup_stale_aircraft`, by default 60. Nothing
-        calls that automatically; it backs the manual ``adsb cleanup`` command.
+        Seconds of silence after which an aircraft heard again is a new contact: its
+        previous flight's live state is cleared before the new frame is applied
+        (rows are never deleted automatically). Also the cutoff for the manual
+        ``adsb cleanup`` command via :meth:`cleanup_stale_aircraft`. By default 60.
     """
 
     def __init__(
@@ -119,6 +121,11 @@ class ADSBDecoder:
                     f"({aircraft_info.get('type_description', 'Unknown type')})"
                 )
 
+        elif current_time - aircraft.lastseen > self.stale_timeout:
+            # Retained row from an earlier flight: nothing on it is current any more.
+            # Without this a DF4/5 reply would republish the old position as live.
+            self._reset_live_state(aircraft)
+
         # Update last seen time and message count
         aircraft.lastseen = current_time
         aircraft.count += 1
@@ -145,6 +152,31 @@ class ADSBDecoder:
         self.session.flush()
 
         return aircraft
+
+    # Everything a frame can update. Identity (icao24, enrichment), firstseen and the
+    # cumulative message count are deliberately not in this list.
+    LIVE_STATE_FIELDS = (
+        "callsign",
+        "squawk",
+        "latitude",
+        "longitude",
+        "altitude",
+        "selected_altitude",
+        "groundspeed",
+        "vertical_rate",
+        "track",
+        "ias",
+        "tas",
+        "mach",
+        "roll",
+        "heading",
+        "nacp",
+    )
+
+    def _reset_live_state(self, aircraft: Aircraft) -> None:
+        """Clear the state vector of a row that is being reactivated after a long gap."""
+        for field in self.LIVE_STATE_FIELDS:
+            setattr(aircraft, field, None)
 
     def _process_adsb_message(self, msg: str, aircraft: Aircraft, timestamp: int) -> None:
         """

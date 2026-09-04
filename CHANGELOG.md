@@ -15,7 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/all` and `/api/icao24` filter by age instead, via a new `max_age` query parameter
   (seconds) that defaults to `--stale-timeout`. The map passes its slider value through
   and refetches when it changes, so dragging it older brings aircraft back. `adsb cleanup`
-  remains as an explicit, manual purge and gained `--stale-timeout`.
+  remains as an explicit, manual purge and gained `--stale-timeout`. An aircraft heard
+  again after more than `--stale-timeout` of silence is a new contact: its previous
+  flight's position, callsign and velocity are cleared before the new frame is applied,
+  so a Mode-S-only reply cannot republish a stale position. Selecting an aircraft fetches
+  its track bounded to the map's age window (`since`), not its whole retained history.
 - The header's aircraft count now counts what the map draws. Mode-S-only aircraft (no
   position) are tracked but invisible, and with the wider age window they were inflating
   the number well past the markers on screen.

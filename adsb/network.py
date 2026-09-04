@@ -119,6 +119,9 @@ class ADSBNetworkClient(TcpClient):
         Type of data format ('raw' or 'beast')
     database : Database
         Database instance for storing decoded data
+    stale_timeout : int, optional
+        Seconds of silence after which an aircraft heard again is a new contact
+        (see :class:`ADSBDecoder`), by default 60
     lat_ref, lon_ref : float, optional
         Receiver position for CPR decoding
 
@@ -132,12 +135,14 @@ class ADSBNetworkClient(TcpClient):
         port: int,
         rawtype: str,
         database: Database,
+        stale_timeout: int = 60,
         lat_ref: float | None = None,
         lon_ref: float | None = None,
     ):
         """Initialize network client."""
         super().__init__(host, port, rawtype)
         self.database = database
+        self.stale_timeout = stale_timeout
         self.lat_ref = lat_ref
         self.lon_ref = lon_ref
         self._stop_event = threading.Event()
@@ -221,7 +226,12 @@ class ADSBNetworkClient(TcpClient):
         batch["messages_received"] = len(messages)
 
         with self.database.get_session() as session:
-            decoder = ADSBDecoder(session, lat_ref=self.lat_ref, lon_ref=self.lon_ref)
+            decoder = ADSBDecoder(
+                session,
+                stale_timeout=self.stale_timeout,
+                lat_ref=self.lat_ref,
+                lon_ref=self.lon_ref,
+            )
 
             for msg, ts, *extra in messages:
                 rssi = extra[0] if extra else None
@@ -267,6 +277,7 @@ def start_network_client(
     port: int,
     rawtype: str,
     database: Database,
+    stale_timeout: int = 60,
     lat_ref: float | None = None,
     lon_ref: float | None = None,
 ) -> ADSBNetworkClient:
@@ -283,6 +294,8 @@ def start_network_client(
         Type of data format ('raw' or 'beast')
     database : Database
         Database instance for storing decoded data
+    stale_timeout : int, optional
+        Seconds of silence after which an aircraft heard again is a new contact
     lat_ref, lon_ref : float, optional
         Receiver position for CPR decoding
 
@@ -296,6 +309,7 @@ def start_network_client(
         port=int(port),
         rawtype=rawtype,
         database=database,
+        stale_timeout=stale_timeout,
         lat_ref=lat_ref,
         lon_ref=lon_ref,
     )

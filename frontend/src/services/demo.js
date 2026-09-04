@@ -158,8 +158,8 @@ export class DemoFleet {
   }
 
   /** Trajectory for one aircraft, shaped like /api/track. */
-  track(icao24) {
+  track(icao24, sinceSeconds = 0) {
     const entry = this.entries.find(e => e.ac.icao24 === icao24)
-    return entry ? entry.history.slice() : []
+    return entry ? entry.history.filter(p => p.timestamp >= sinceSeconds) : []
   }
 }

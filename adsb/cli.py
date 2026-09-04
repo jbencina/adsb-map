@@ -109,8 +109,9 @@ def start():
     "--stale-timeout",
     default=60,
     help=(
-        "Seconds after which an aircraft is hidden from /api/all unless the caller asks "
-        "for a wider max_age. Nothing is deleted; use `adsb cleanup` to purge."
+        "Seconds of silence after which an aircraft is hidden from /api/all (unless the "
+        "caller asks for a wider max_age) and, if heard again, treated as a new contact. "
+        "Nothing is deleted; use `adsb cleanup` to purge."
     ),
     show_default=True,
 )
@@ -246,6 +247,7 @@ def backend(
             port=net_port,
             rawtype=net_type,
             database=database,
+            stale_timeout=stale_timeout,
             lat_ref=lat,
             lon_ref=lon,
         )

@@ -139,11 +139,13 @@ function AircraftMap({
    */
   const formatRssi = rssi => rssi.toFixed(1).replace('-', '\u2212')
 
-  // Fetch detailed track when an aircraft is selected
+  // Fetch detailed track when an aircraft is selected, bounded to the same age
+  // window as the aircraft list so past flights of a regular visitor stay out of it
   useEffect(() => {
     if (selectedAircraft) {
       setLoadingTrack(true)
-      fetchAircraftTrack(selectedAircraft.icao24)
+      const since = Math.floor(Date.now() / 1000) - maxAgeMinutes * 60
+      fetchAircraftTrack(selectedAircraft.icao24, since)
         .then(trackData => {
           setSelectedAircraftTrack(trackData)
           setLoadingTrack(false)
@@ -163,7 +165,7 @@ function AircraftMap({
         onTrackingAircraft(false)
       }
     }
-  }, [selectedAircraft, onTrackingAircraft])
+  }, [selectedAircraft, onTrackingAircraft, maxAgeMinutes])
 
   // Filter aircraft with valid positions
   const validAircraft = useMemo(() => aircraft.filter(hasPosition), [aircraft])

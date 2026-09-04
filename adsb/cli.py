@@ -2,6 +2,7 @@
 
 import logging
 import os
+import threading
 import warnings
 
 import click
@@ -19,6 +20,7 @@ from adsb.ui import DEFAULT_API_URL, create_ui_app
 
 AIRCRAFT_DB_URL = "https://github.com/wiedehopf/tar1090-db/raw/csv/aircraft.csv.gz"
 DATEFMT = "%Y-%m-%d %H:%M:%S"
+SHUTDOWN_TIMEOUT = 10  # seconds to let a service finish its own shutdown
 
 
 class DropNoiseFilter(logging.Filter):
@@ -67,6 +69,65 @@ def aircraft_db_option(f):
     )(f)
 
 
+def feed_options(f):
+    """Feed, database and decoding options shared by `start backend` and `start all`."""
+    options = [
+        click.option(
+            "--db-path",
+            default="adsb.db",
+            help="Path to SQLite database file",
+            show_default=True,
+        ),
+        click.option(
+            "--source",
+            type=click.Choice(["net"], case_sensitive=False),
+            help="Data source (currently only 'net' is supported)",
+        ),
+        click.option(
+            "--connect",
+            nargs=3,
+            metavar="HOST PORT TYPE",
+            help="Connect to network source: HOST PORT TYPE (raw/beast)",
+        ),
+        click.option(
+            "--stale-timeout",
+            default=60,
+            help=(
+                "Seconds of silence after which an aircraft is hidden from /api/all (unless the "
+                "caller asks for a wider max_age) and, if heard again, treated as a new contact. "
+                "Nothing is deleted; use `adsb cleanup` to purge."
+            ),
+            show_default=True,
+        ),
+        click.option(
+            "--lat",
+            type=float,
+            help="Receiver latitude (required for accurate position decoding)",
+        ),
+        click.option(
+            "--lon",
+            type=float,
+            help="Receiver longitude (required for accurate position decoding)",
+        ),
+        click.option(
+            "--stats-interval",
+            default=10,
+            show_default=True,
+            metavar="SECONDS",
+            help="Print a feed/decoding status line this often (0 to disable)",
+        ),
+        click.option(
+            "--access-log",
+            is_flag=True,
+            help="Log every HTTP request (noisy: the map polls /api/all every second)",
+        ),
+    ]
+    # Applied bottom-up, so `--help` lists them in the order written above.
+    for option in reversed(options):
+        f = option(f)
+    return f
+
+
 @click.group()
 @click.version_option(version=__version__)
 def main():
@@ -82,66 +143,11 @@ def main():
 
 @main.group()
 def start():
-    """Start a service: `backend` (decoder + API) or `frontend` (map UI client)."""
+    """Start a service: `backend` (decoder + API), `frontend` (map UI),
+    or `all` (backend + frontend in one command)."""
 
 
-@start.command()
-@click.option("--host", default="0.0.0.0", help="Host to bind the server to", show_default=True)
-@click.option("--port", default=8000, help="Port to bind the server to", show_default=True)
-@click.option(
-    "--db-path",
-    default="adsb.db",
-    help="Path to SQLite database file",
-    show_default=True,
-)
-@click.option(
-    "--source",
-    type=click.Choice(["net"], case_sensitive=False),
-    help="Data source (currently only 'net' is supported)",
-)
-@click.option(
-    "--connect",
-    nargs=3,
-    metavar="HOST PORT TYPE",
-    help="Connect to network source: HOST PORT TYPE (raw/beast)",
-)
-@click.option(
-    "--stale-timeout",
-    default=60,
-    help=(
-        "Seconds of silence after which an aircraft is hidden from /api/all (unless the "
-        "caller asks for a wider max_age) and, if heard again, treated as a new contact. "
-        "Nothing is deleted; use `adsb cleanup` to purge."
-    ),
-    show_default=True,
-)
-@click.option(
-    "--lat",
-    type=float,
-    help="Receiver latitude (required for accurate position decoding)",
-)
-@click.option(
-    "--lon",
-    type=float,
-    help="Receiver longitude (required for accurate position decoding)",
-)
-@click.option(
-    "--stats-interval",
-    default=10,
-    show_default=True,
-    metavar="SECONDS",
-    help="Print a feed/decoding status line this often (0 to disable)",
-)
-@click.option(
-    "--access-log",
-    is_flag=True,
-    help="Log every HTTP request (noisy: the map polls /api/all every second)",
-)
-@click.option("--reload", is_flag=True, help="Enable auto-reload for development")
-@aircraft_db_option
-def backend(
-    host: str,
-    port: int,
+def _build_backend(
     db_path: str,
     source: str,
     connect: tuple,
@@ -150,24 +156,11 @@ def backend(
     lon: float,
     stats_interval: int,
     access_log: bool,
-    reload: bool,
 ):
-    """
-    Start the decoder and REST API.
+    """Configure logging, open the database, start the decoder, build the API app.
 
-    The map UI is a separate service: run `adsb start frontend` (on this or
-    any other machine) and point it here with --api-url.
-
-    Examples:
-
-        # Start with default settings
-        adsb start backend
-
-        # Custom database path
-        adsb start backend --db-path /path/to/adsb.db
-
-        # With a network data source
-        adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+    Everything `start backend` does except bind a socket, so `start all` can
+    reuse it and drive the server itself. Returns (app, log_config, reporter).
     """
     root = logging.getLogger()
     root.setLevel(logging.INFO)
@@ -278,6 +271,56 @@ def backend(
             database, network_client, interval=stats_interval, stale_timeout=stale_timeout
         ).start()
 
+    return app, log_config, reporter
+
+
+@start.command()
+@click.option("--host", default="0.0.0.0", help="Host to bind the server to", show_default=True)
+@click.option("--port", default=8000, help="Port to bind the server to", show_default=True)
+@feed_options
+@click.option("--reload", is_flag=True, help="Enable auto-reload for development")
+@aircraft_db_option
+def backend(
+    host: str,
+    port: int,
+    db_path: str,
+    source: str,
+    connect: tuple,
+    stale_timeout: int,
+    lat: float,
+    lon: float,
+    stats_interval: int,
+    access_log: bool,
+    reload: bool,
+):
+    """
+    Start the decoder and REST API.
+
+    The map UI is a separate service: run `adsb start frontend` (on this or
+    any other machine) and point it here with --api-url.
+
+    Examples:
+
+        # Start with default settings
+        adsb start backend
+
+        # Custom database path
+        adsb start backend --db-path /path/to/adsb.db
+
+        # With a network data source
+        adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+    """
+    app, log_config, reporter = _build_backend(
+        db_path=db_path,
+        source=source,
+        connect=connect,
+        stale_timeout=stale_timeout,
+        lat=lat,
+        lon=lon,
+        stats_interval=stats_interval,
+        access_log=access_log,
+    )
+
     # uvicorn handles signals and triggers the FastAPI lifespan shutdown.
     click.echo(f"Starting API server on http://{host}:{port}/")
     try:
@@ -285,6 +328,36 @@ def backend(
     finally:
         if reporter:
             reporter.stop()
+
+
+def _build_frontend(api_url: str, demo: bool):
+    """Everything `start frontend` does except bind a socket. Returns the app."""
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s - [UI] %(levelname)s - %(message)s",
+        datefmt=DATEFMT,
+    )
+
+    try:
+        app = create_ui_app(api_url, demo=demo)
+    except (RuntimeError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if demo:
+        click.echo("Demo mode: simulated aircraft, no backend needed")
+    else:
+        click.echo(f"Backend API: {app.state.api_url}")
+    _echo_checks(
+        [
+            (
+                bool(os.environ.get("MAPBOX_TOKEN")),
+                "Mapbox token set",
+                "MAPBOX_TOKEN unset - map tiles will not render",
+            ),
+        ]
+    )
+
+    return app
 
 
 @start.command()
@@ -327,32 +400,138 @@ def frontend(api_url: str, host: str, port: int, demo: bool):
         # No backend at all: simulated traffic for trying out or testing the UI
         adsb start frontend --demo
     """
-    logging.basicConfig(
-        level=logging.WARNING,
-        format="%(asctime)s - [UI] %(levelname)s - %(message)s",
-        datefmt=DATEFMT,
-    )
-
-    try:
-        app = create_ui_app(api_url, demo=demo)
-    except (RuntimeError, ValueError) as e:
-        raise click.ClickException(str(e)) from e
-
-    if demo:
-        click.echo("Demo mode: simulated aircraft, no backend needed")
-    else:
-        click.echo(f"Backend API: {app.state.api_url}")
-    _echo_checks(
-        [
-            (
-                bool(os.environ.get("MAPBOX_TOKEN")),
-                "Mapbox token set",
-                "MAPBOX_TOKEN unset - map tiles will not render",
-            ),
-        ]
-    )
+    app = _build_frontend(api_url, demo=demo)
     click.echo(f"Starting map UI on http://{host}:{port}/")
     uvicorn.run(app, host=host, port=port, log_level="warning")
+
+
+def _proxy_url(host: str, port: int) -> str:
+    """Where the bundled UI should reach the backend it was started alongside.
+
+    A wildcard bind is reachable on the loopback; a specific --host may not be,
+    so proxy to the address the backend actually listens on.
+    """
+    target = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    return f"http://[{target}]:{port}" if ":" in target else f"http://{target}:{port}"
+
+
+@start.command(name="all")
+@click.option(
+    "--host",
+    default="127.0.0.1",
+    help="Host to bind both services to (use 0.0.0.0 to share on the LAN)",
+    show_default=True,
+)
+@click.option("--backend-port", default=8000, help="Backend bind port", show_default=True)
+@click.option("--frontend-port", default=3000, help="Frontend bind port", show_default=True)
+@feed_options
+@aircraft_db_option
+def all_(
+    host: str,
+    backend_port: int,
+    frontend_port: int,
+    db_path: str,
+    source: str,
+    connect: tuple,
+    stale_timeout: int,
+    lat: float,
+    lon: float,
+    stats_interval: int,
+    access_log: bool,
+):
+    """
+    Start the backend and the map UI together.
+
+    The same as running `adsb start backend` and `adsb start frontend` side by
+    side, in one process: the UI proxies to the backend on --host, so only
+    --host and --frontend-port decide who can reach the map.
+
+    Examples:
+
+        # Everything on this machine
+        adsb start all --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+
+        # Share the map with the rest of the LAN
+        adsb start all --host 0.0.0.0 --source net --connect localhost 30005 beast
+    """
+    # Built here, in order, so the backend's logging configuration wins over the
+    # frontend's basicConfig() and a startup failure is reported before anything binds.
+    backend_app, log_config, reporter = _build_backend(
+        db_path=db_path,
+        source=source,
+        connect=connect,
+        stale_timeout=stale_timeout,
+        lat=lat,
+        lon=lon,
+        stats_interval=stats_interval,
+        access_log=access_log,
+    )
+    frontend_app = _build_frontend(_proxy_url(host, backend_port), demo=False)
+
+    servers = {
+        "backend": uvicorn.Server(
+            uvicorn.Config(backend_app, host=host, port=backend_port, log_config=log_config)
+        ),
+        # log_config=None: the backend already configured uvicorn's loggers for
+        # this process, and a second dictConfig would undo it.
+        "frontend": uvicorn.Server(
+            uvicorn.Config(frontend_app, host=host, port=frontend_port, log_config=None)
+        ),
+    }
+    ports = {"backend": backend_port, "frontend": frontend_port}
+
+    failures: list[tuple[str, BaseException]] = []
+    finished: list[str] = []
+    first_exit = threading.Event()
+
+    def _run(name: str, server: uvicorn.Server) -> None:
+        try:
+            server.run()
+        except BaseException as err:  # uvicorn sys.exit()s when it cannot bind
+            failures.append((name, err))
+        finally:
+            finished.append(name)
+            first_exit.set()
+
+    threads = [
+        threading.Thread(target=_run, args=(name, server), name=f"adsb-{name}", daemon=True)
+        for name, server in servers.items()
+    ]
+    for thread in threads:
+        thread.start()
+
+    click.echo(
+        f"Starting ADS-B stack: backend=http://{host}:{backend_port}, "
+        f"frontend=http://{host}:{frontend_port}"
+    )
+
+    # uvicorn only installs signal handlers on the main thread, so neither server
+    # sees Ctrl-C from here. Catch it ourselves and ask both to stop, which is what
+    # runs the FastAPI lifespan shutdown (and so stops the network client).
+    interrupted = False
+    try:
+        first_exit.wait()
+    except KeyboardInterrupt:
+        interrupted = True
+        click.echo("\nShutting down...")
+    finally:
+        for server in servers.values():
+            server.should_exit = True
+        for thread in threads:
+            thread.join(timeout=SHUTDOWN_TIMEOUT)
+        if reporter:
+            reporter.stop()
+
+    if failures:
+        name, err = failures[0]
+        detail = (
+            f"exit status {err.code} - is port {ports[name]} already in use?"
+            if isinstance(err, SystemExit)
+            else f"{err.__class__.__name__}: {err}"
+        )
+        raise click.ClickException(f"{name} stopped: {detail}")
+    if not interrupted:
+        raise click.ClickException(f"{finished[0]} stopped unexpectedly")
 
 
 @main.command()

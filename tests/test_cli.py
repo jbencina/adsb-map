@@ -1,6 +1,10 @@
 """Tests for CLI behavior (click group, environment loading)."""
 
 import os
+import sys
+import threading
+import time
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
@@ -154,6 +158,147 @@ def test_ui_launches_proxy_app(tmp_path, monkeypatch, built_frontend, no_uvicorn
     assert no_uvicorn["app"].state.api_url == "http://receiver.local:8000"
     assert no_uvicorn["port"] == 3456
     assert "[!!] MAPBOX_TOKEN unset" in result.output
+
+
+@pytest.fixture
+def fake_servers(monkeypatch):
+    """Replace uvicorn.Server so `start all` drives stubs instead of binding ports.
+
+    A stub blocks until `should_exit` is set, like a real server, so tests see the
+    same shutdown handshake the command relies on. Tests override that per port
+    via `behaviors` to stand in for a crash or an immediate return.
+    """
+    import adsb.cli
+
+    servers = []
+    behaviors = {}
+
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+            self.should_exit = False
+            self.ran = False
+            servers.append(self)
+
+        def run(self):
+            self.ran = True
+            behavior = behaviors.get(self.config.port)
+            if behavior is not None:
+                behavior(self)
+                return
+            while not self.should_exit:
+                time.sleep(0.005)
+
+    monkeypatch.setattr(adsb.cli.uvicorn, "Server", FakeServer)
+    return SimpleNamespace(servers=servers, behaviors=behaviors)
+
+
+def run_start_all(tmp_path, *args):
+    """Invoke `adsb start all` with the status reporter off to keep output quiet."""
+    return CliRunner().invoke(
+        main,
+        ["start", "all", "--db-path", str(tmp_path / "t.db"), "--stats-interval", "0", *args],
+    )
+
+
+def test_start_all_serves_backend_and_frontend(tmp_path, monkeypatch, built_frontend, fake_servers):
+    """Both services run on the requested ports, with the UI proxying to the backend."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MAPBOX_TOKEN", "pk.local")
+    fake_servers.behaviors[8800] = lambda server: None
+    fake_servers.behaviors[3456] = lambda server: None
+
+    result = run_start_all(
+        tmp_path,
+        "--host",
+        "127.0.0.1",
+        "--backend-port",
+        "8800",
+        "--frontend-port",
+        "3456",
+        "--source",
+        "net",
+        "--connect",
+        "localhost",
+        "30005",
+        "beast",
+    )
+
+    by_port = {server.config.port: server for server in fake_servers.servers}
+    assert set(by_port) == {8800, 3456}
+    # Both threads are joined before the command returns, so both must have run.
+    assert all(server.ran for server in fake_servers.servers)
+    assert by_port[8800].config.host == "127.0.0.1"
+    assert by_port[3456].config.host == "127.0.0.1"
+    assert by_port[3456].config.app.state.api_url == "http://127.0.0.1:8800"
+
+    # A service returning on its own is a failure, not a clean run.
+    assert result.exit_code != 0
+    assert "stopped unexpectedly" in result.output
+
+
+def test_start_all_proxies_to_the_address_the_backend_binds(
+    tmp_path, monkeypatch, built_frontend, fake_servers
+):
+    """A specific --host may not answer on loopback, so the UI must proxy to it."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MAPBOX_TOKEN", "pk.local")
+    fake_servers.behaviors[8800] = lambda server: None
+    fake_servers.behaviors[3456] = lambda server: None
+
+    run_start_all(
+        tmp_path, "--host", "192.0.2.10", "--backend-port", "8800", "--frontend-port", "3456"
+    )
+
+    ui = next(server for server in fake_servers.servers if server.config.port == 3456)
+    assert ui.config.app.state.api_url == "http://192.0.2.10:8800"
+
+
+def test_start_all_reports_a_service_that_cannot_bind(
+    tmp_path, monkeypatch, built_frontend, fake_servers
+):
+    """uvicorn sys.exit()s when a port is taken; that must not look like success."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MAPBOX_TOKEN", "pk.local")
+    fake_servers.behaviors[8800] = lambda server: sys.exit(1)
+
+    result = run_start_all(tmp_path, "--backend-port", "8800", "--frontend-port", "3456")
+
+    assert result.exit_code != 0
+    assert "backend stopped" in result.output
+    assert "8800" in result.output
+    # The surviving service is asked to stop rather than killed mid-request.
+    ui = next(server for server in fake_servers.servers if server.config.port == 3456)
+    assert ui.should_exit is True
+
+
+def test_start_all_shuts_both_down_on_interrupt(
+    tmp_path, monkeypatch, built_frontend, fake_servers
+):
+    """Ctrl-C reaches the main thread only, so `all` must relay it to both servers."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MAPBOX_TOKEN", "pk.local")
+
+    import adsb.cli
+
+    class InterruptingEvent(threading.Event):
+        """Stand in for the user pressing Ctrl-C while the command waits."""
+
+        def wait(self, timeout=None):
+            raise KeyboardInterrupt
+
+    # Swap only the name `adsb.cli` looks up: patching threading.Event globally
+    # would also break Thread.start(), which waits on one internally.
+    monkeypatch.setattr(
+        adsb.cli, "threading", SimpleNamespace(Thread=threading.Thread, Event=InterruptingEvent)
+    )
+
+    result = run_start_all(tmp_path, "--backend-port", "8800", "--frontend-port", "3456")
+
+    assert result.exit_code == 0, result.output
+    assert "Shutting down" in result.output
+    assert all(server.should_exit for server in fake_servers.servers)
+    assert all(server.ran for server in fake_servers.servers)
 
 
 def test_frontend_defaults_to_local_backend(tmp_path, monkeypatch, built_frontend, no_uvicorn):

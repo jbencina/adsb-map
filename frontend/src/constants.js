@@ -28,10 +28,6 @@ export const MAP_STYLE_DARK = 'mapbox://styles/mapbox/dark-v11'
 // Legacy export for backwards compatibility
 export const MAP_STYLE = MAP_STYLE_LIGHT
 
-// Track Configuration
-export const MAX_TRACK_POINTS = 500
-export const TRACK_MIN_DISTANCE_CHANGE = 0.001 // ~100 meters in degrees
-
 // Track Display Configuration
 // Light and dark map styles need different blues to hold the same contrast
 export const TRACK_COLOR = '#0071e3'

@@ -36,7 +36,7 @@ function App() {
   const [showTracks, setShowTracks] = useState(false)
   const [showLabels, setShowLabels] = useState(true)
   const [shadeBySignal, setShadeBySignal] = useState(false)
-  const [isTrackingAircraft, setIsTrackingAircraft] = useState(false)
+  const [selectedIcao24, setSelectedIcao24] = useState(null)
   const [showSettings, setShowSettings] = useState(false)
   const settingsRef = useRef(null)
 
@@ -52,8 +52,12 @@ function App() {
   // The header counts what the map draws; position-less aircraft are still tracked but invisible
   const onMapCount = useMemo(() => filteredAircraft.filter(hasPosition).length, [filteredAircraft])
 
-  // Track aircraft flight paths
-  const { tracks } = useAircraftTracks(aircraft, maxAgeMinutes)
+  // Track lines from the backend's stored positions, polled only while something draws them
+  const { tracks, loaded: tracksLoaded } = useAircraftTracks(
+    showTracks || selectedIcao24 !== null,
+    refreshInterval,
+    maxAgeMinutes
+  )
 
   // Close the settings popover on Escape or on a click outside it
   useEffect(() => {
@@ -213,19 +217,8 @@ function App() {
                   />
                 </div>
 
-                <div
-                  className={`control-row show-tracks-toggle ${isTrackingAircraft ? 'disabled' : ''}`}
-                >
-                  <label htmlFor="show-tracks">
-                    Show trails
-                    {isTrackingAircraft ? (
-                      <span className="disabled-hint">
-                        Hidden while an aircraft&apos;s history is shown
-                      </span>
-                    ) : (
-                      <span className="disabled-hint">Positions seen since this page opened</span>
-                    )}
-                  </label>
+                <div className="control-row show-tracks-toggle">
+                  <label htmlFor="show-tracks">Show tracks</label>
                   <input
                     id="show-tracks"
                     className="switch"
@@ -233,15 +226,9 @@ function App() {
                     role="switch"
                     checked={showTracks}
                     onChange={e => setShowTracks(e.target.checked)}
-                    aria-label="Toggle recent position trails behind each aircraft"
-                    aria-describedby="show-tracks-desc"
+                    aria-label="Toggle aircraft flight path tracks"
                     aria-checked={showTracks}
-                    disabled={isTrackingAircraft}
                   />
-                  <span id="show-tracks-desc" className="sr-only">
-                    Draws a line through the positions received while this page has been open.
-                    Select an aircraft to see its stored history instead.
-                  </span>
                 </div>
 
                 <div className="control-row theme-toggle">
@@ -285,11 +272,12 @@ function App() {
           aircraft={filteredAircraft}
           mapboxToken={MAPBOX_TOKEN}
           tracks={tracks}
+          tracksLoaded={tracksLoaded}
           showTracks={showTracks}
           showLabels={showLabels}
           shadeBySignal={shadeBySignal}
           maxAgeMinutes={maxAgeMinutes}
-          onTrackingAircraft={setIsTrackingAircraft}
+          onSelectAircraft={setSelectedIcao24}
           theme={appliedTheme}
         />
       </main>

@@ -1,88 +1,62 @@
 /**
- * Custom hook for managing aircraft track history
+ * Custom hook that holds every aircraft's track line, fed from /api/tracks
  */
 
-import { useState, useCallback, useEffect } from 'react'
-import { MAX_TRACK_POINTS, TRACK_MIN_DISTANCE_CHANGE } from '../constants'
+import { useEffect, useState } from 'react'
+import { fetchAircraftTracks } from '../services/api'
+import { mergeTracks, newestTimestamp } from '../tracks'
 
 /**
- * Hook to manage aircraft track history
+ * Track lines for the map, one per aircraft, from the positions the backend stores.
  *
- * @param {Array} aircraft - Array of aircraft objects
- * @param {number} maxAgeMinutes - Maximum age for tracks in minutes
- * @returns {Object} Object containing tracks
+ * While enabled it seeds every line from the age window, then polls for new
+ * positions since the newest one it holds. Nothing is sampled or thinned in the
+ * browser, so the overview lines and the selected aircraft's line are the same
+ * data. Widening the window reseeds; narrowing it prunes.
+ *
+ * @param {boolean} enabled - Poll only while lines are shown or an aircraft is selected
+ * @param {number} refreshInterval - Poll interval in seconds
+ * @param {number} maxAgeMinutes - Window to seed from and prune to
+ * @returns {{tracks: Object, loaded: boolean}} icao24 to [lon, lat, timestamp] points,
+ *   and whether the first fetch since enabling has completed
  */
-export function useAircraftTracks(aircraft, maxAgeMinutes) {
-  const [tracks, setTracks] = useState({}) // Map of icao24 -> array of [lon, lat, timestamp]
+export function useAircraftTracks(enabled, refreshInterval, maxAgeMinutes) {
+  const [tracks, setTracks] = useState({})
+  const [loaded, setLoaded] = useState(false)
 
-  /**
-   * Update track history with new aircraft positions
-   *
-   * @param {Array} aircraftData - Array of aircraft objects
-   */
-  const updateTracks = useCallback(
-    aircraftData => {
-      setTracks(prevTracks => {
-        const newTracks = { ...prevTracks }
-        const timestamp = Date.now()
-
-        aircraftData.forEach(ac => {
-          // Only record positions with valid coordinates
-          // Use explicit type checks to handle latitude/longitude of 0 (equator/prime meridian)
-          if (typeof ac.latitude === 'number' && typeof ac.longitude === 'number' && ac.icao24) {
-            const position = [ac.longitude, ac.latitude, timestamp]
-
-            if (!newTracks[ac.icao24]) {
-              newTracks[ac.icao24] = [position]
-            } else {
-              // Check if position has changed significantly (avoid duplicate points)
-              const lastPos = newTracks[ac.icao24][newTracks[ac.icao24].length - 1]
-              const lonDiff = Math.abs(lastPos[0] - position[0])
-              const latDiff = Math.abs(lastPos[1] - position[1])
-
-              // Only add if position changed by more than the minimum distance threshold
-              if (lonDiff > TRACK_MIN_DISTANCE_CHANGE || latDiff > TRACK_MIN_DISTANCE_CHANGE) {
-                newTracks[ac.icao24] = [...newTracks[ac.icao24], position]
-
-                // Limit track points to prevent memory issues
-                if (newTracks[ac.icao24].length > MAX_TRACK_POINTS) {
-                  newTracks[ac.icao24] = newTracks[ac.icao24].slice(-MAX_TRACK_POINTS)
-                }
-              }
-            }
-          }
-        })
-
-        // Clean up tracks for aircraft not seen recently (older than maxAgeMinutes * 2)
-        const currentTime = Math.floor(Date.now() / 1000)
-        const maxAgeSeconds = maxAgeMinutes * 60 * 2
-
-        Object.keys(newTracks).forEach(icao24 => {
-          const aircraft = aircraftData.find(ac => ac.icao24 === icao24)
-          if (!aircraft) {
-            // Check if track is too old
-            const lastPoint = newTracks[icao24][newTracks[icao24].length - 1]
-            const ageSeconds = currentTime - lastPoint[2] / 1000
-            if (ageSeconds > maxAgeSeconds) {
-              delete newTracks[icao24]
-            }
-          }
-        })
-
-        return newTracks
-      })
-    },
-    [maxAgeMinutes]
-  )
-
-  // Update tracks when aircraft data changes
   useEffect(() => {
-    if (aircraft.length > 0) {
-      // Updating tracks based on aircraft data - this setState is intentional
-      updateTracks(aircraft)
+    if (!enabled) {
+      setTracks({})
+      setLoaded(false)
+      return undefined
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aircraft])
+    let cancelled = false
+    let held = {}
+    // The first poll after enabling (or a window change) starts from scratch
+    let seeded = false
 
-  return { tracks }
+    const poll = async () => {
+      const cutoff = Math.floor(Date.now() / 1000) - maxAgeMinutes * 60
+      const since = seeded ? (newestTimestamp(held) ?? cutoff) : cutoff
+      try {
+        const fresh = await fetchAircraftTracks(Math.max(since, cutoff))
+        if (cancelled) return
+        held = mergeTracks(seeded ? held : {}, fresh, cutoff)
+        seeded = true
+        setTracks(held)
+        setLoaded(true)
+      } catch (err) {
+        if (!cancelled) console.error('Error fetching aircraft tracks:', err)
+      }
+    }
+
+    poll()
+    const interval = setInterval(poll, refreshInterval * 1000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [enabled, refreshInterval, maxAgeMinutes])
+
+  return { tracks, loaded }
 }

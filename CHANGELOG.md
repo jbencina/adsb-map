@@ -12,9 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rotation is CSS-animated from the raw track, so a report crossing north (359° to 1°)
   played as a 358° turn the long way round. Each marker now keeps a continuous heading
   that only ever moves by the shortest turn, and the detail card's arrow follows it.
-- **The selected aircraft's history line froze at click time** (#16). It was fetched
-  once; the marker then flew on ahead of it. It is now refetched on every new fix so it
-  keeps ending at the marker.
+- **The overview tracks and the selected aircraft's track disagreed** (#16). The
+  overview was built in the browser from whatever the poll happened to see since the
+  page opened, thinned to one point per 100 m, while a click fetched the stored history
+  from `/api/track` once and then let the marker fly on ahead of it. There is now one
+  source: a new `/api/tracks` endpoint returns every aircraft's stored positions in the
+  window, the map seeds from it and polls it incrementally (`since`), and the selected
+  aircraft's line is the same data highlighted. Tracks are no longer hidden, and the
+  switch no longer disabled, while an aircraft is selected.
 - **`/api/all` took seconds after an overnight run.** With nothing ever purged, the
   endpoint was running one unindexed `ORDER BY ... LIMIT 4` query per aircraft against
   `aircraft_metadata`, each a full scan and sort of every reception row ever stored
@@ -41,10 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decoder's commits. Expect `adsb.db-wal` and `adsb.db-shm` next to the database.
 
 ### Changed
-- The map's "Show tracks" switch is now "Show trails", with a note that trails are the
-  positions seen since the page opened, and the detail card labels its line as stored
-  history (#16). Trail, history and the track angle come from different sources and are
-  documented as such in the README.
+- The map only polls `/api/tracks` while "Show tracks" is on or an aircraft is
+  selected, and the detail card's Track row explains that the angle is the reported
+  ground track rather than something derived from the line (#16).
 - **The backend no longer purges stale aircraft.** Previously anything not seen within
   `--stale-timeout` was deleted every 30 seconds, taking its positions and reception
   metadata with it, so the map's "max age" slider could never reach past the last minute

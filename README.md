@@ -36,7 +36,7 @@ adsb start frontend                          # add --api-url http://receiver:800
 adsb start all --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 ```
 
-Visit http://localhost:3000/. Aircraft show up as markers; click one for its history.
+Visit http://localhost:3000/. Aircraft show up as markers; click one for its track.
 
 The frontend proxies `/api/*` to the backend, so the browser only ever talks to the
 frontend process: no CORS, no per-machine build, and the Mapbox token stays with the UI.
@@ -123,6 +123,7 @@ paths (proxied) plus the map itself.
 | `GET /api/all?max_age={seconds}` | Aircraft state vectors seen within `max_age` (default: `--stale-timeout`) |
 | `GET /api/icao24?max_age={seconds}` | ICAO24 addresses seen within `max_age` (default: `--stale-timeout`) |
 | `GET /api/track?icao24={icao24}&since={ts}` | Trajectory for one aircraft |
+| `GET /api/tracks?max_age={seconds}&since={ts}` | Trajectories of every aircraft in the window, keyed by ICAO24; `since` overrides the window for incremental polling |
 | `GET /api/sensors` | Receiver/sensor serials heard within `--metadata-retention` |
 | `GET /api` | API discovery (welcome JSON) |
 | `GET /docs` | Interactive OpenAPI docs (backend) |
@@ -142,19 +143,21 @@ The database runs in SQLite WAL mode, so `adsb.db-wal` and `adsb.db-shm` alongsi
 The REST API is self-contained — you can ignore the map and build your own client
 (mobile, monitoring system, dashboard, etc.) against the backend's `/api/*`.
 
-## Trails, history and track on the map
+## Track lines on the map
 
-The map shows an aircraft's movement in three ways, from three different sources. They
-agree in spirit but not to the metre, and that is expected:
+Every track line on the map comes from one place: the positions the backend stores,
+fetched in bulk from `/api/tracks`. "Show tracks" draws every aircraft's line, and
+clicking an aircraft highlights that same line, so the two can never disagree and the
+line reaches back through the whole "max age" window, not just since the page opened.
+The UI seeds from the window once, then polls with `since` set to the newest timestamp
+it holds, so each refresh only carries the last second or so of positions. It polls only
+while lines are being drawn.
 
-| What you see | Where it comes from |
-|---|---|
-| **Trail** (the "Show trails" switch) | Positions received by the browser since the page opened, one per poll and only when the aircraft has moved about 100 m. Nothing before the page loaded, and nothing from the database. |
-| **History** (click an aircraft) | Every stored position from `/api/track` within the "max age" window, refetched each time the aircraft reports a new fix. Denser and longer than the trail. Trails are hidden while a history is shown. |
-| **Track** (marker rotation, detail card) | The ground track from the aircraft's latest velocity report, not derived from the positions. A marker can point a few degrees off its own trail because the two are decoded from different messages. |
-
-Marker rotation is animated, and always turns the short way round, so a track crossing
-north (359° to 1°) nudges the marker rather than spinning it.
+The marker's rotation is a different measurement: the ground track from the aircraft's
+latest velocity report, not something derived from the positions. A marker can point a
+few degrees off its own line because the two come from different messages. Rotation is
+animated and always turns the short way round, so a track crossing north (359° to 1°)
+nudges the marker rather than spinning it.
 
 ## Running on separate machines
 

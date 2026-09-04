@@ -295,11 +295,6 @@ main {
   color: var(--ink);
 }
 
-.control-row.disabled {
-  opacity: 0.55;
-}
-
-.disabled-hint,
 .theme-indicator {
   font-size: 12px;
   font-weight: 400;

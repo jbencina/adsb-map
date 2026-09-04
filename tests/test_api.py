@@ -13,6 +13,7 @@ from adsb.api import (
     get_db,
     latest_metadata_stmt,
     track_stmt,
+    tracks_stmt,
 )
 from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
 from tests.helpers import add_metadata, query_plan, statements_containing
@@ -177,6 +178,59 @@ def test_get_track_with_since_filter(test_session, client, aircraft):
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 3  # Should only get positions at 1234567892, 1234567893, 1234567894
+
+
+def test_get_tracks_groups_positions_by_icao24(test_session, test_db, client, aircraft):
+    """/api/tracks returns every aircraft's positions since the cutoff, keyed by icao24."""
+    now = int(time.time())
+    other = Aircraft(icao24="def456", firstseen=now - 100, lastseen=now, count=1)
+    test_session.add(other)
+    test_session.commit()
+    for i in range(3):
+        for a, lat in ((aircraft, 40.7), (other, 51.5)):
+            test_session.add(
+                AircraftPosition(
+                    aircraft_id=a.id,
+                    timestamp=now - 20 + i,
+                    latitude=lat + i * 0.1,
+                    longitude=-74.0,
+                    altitude=10000,
+                )
+            )
+    test_session.commit()
+
+    with statements_containing(test_db.engine, "aircraft_positions") as seen:
+        response = client.get("/api/tracks?max_age=60")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert set(data) == {"abc123", "def456"}
+    assert [p["timestamp"] for p in data["abc123"]] == [now - 20, now - 19, now - 18]
+    assert data["def456"][2]["latitude"] == pytest.approx(51.7)
+    assert len(seen) == 1, seen
+
+
+def test_get_tracks_since_is_incremental(test_session, client, aircraft):
+    """`since` overrides the window so the map can ask only for what it has not seen."""
+    now = int(time.time())
+    for i in range(5):
+        test_session.add(
+            AircraftPosition(
+                aircraft_id=aircraft.id,
+                timestamp=now - 4 + i,
+                latitude=40.7,
+                longitude=-74.0,
+            )
+        )
+    test_session.commit()
+
+    data = client.get(f"/api/tracks?since={now - 1}").json()
+    assert [p["timestamp"] for p in data["abc123"]] == [now - 1, now]
+
+
+def test_get_tracks_omits_aircraft_without_positions(client, aircraft):
+    """Mode-S-only aircraft have nothing to draw and do not appear at all."""
+    assert client.get("/api/tracks").json() == {}
 
 
 def test_get_sensors(test_session, client, aircraft):
@@ -405,8 +459,9 @@ def test_all_uses_bounded_number_of_queries(test_db, test_session, client):
         (aircraft_since_stmt(cutoff=0), "ix_aircraft_lastseen"),
         (latest_metadata_stmt(cutoff=0), "ix_aircraft_metadata_aircraft_id_system_timestamp"),
         (track_stmt(aircraft_id=1, since=0), "ix_aircraft_positions_aircraft_id_timestamp"),
+        (tracks_stmt(since=0), "ix_aircraft_positions_timestamp"),
     ],
-    ids=["aircraft_since", "latest_metadata", "track"],
+    ids=["aircraft_since", "latest_metadata", "track", "tracks"],
 )
 def test_hot_statements_seek_their_index(test_db, stmt, index):
     """The statements behind /api/all and /api/track must seek, never scan, a table."""

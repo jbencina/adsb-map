@@ -36,6 +36,9 @@ def api_index() -> dict:
             "/api/track?icao24={icao24}&since={timestamp}": (
                 "returns the trajectory of a given aircraft"
             ),
+            "/api/tracks?max_age={seconds}&since={timestamp}": (
+                "returns the trajectories of all aircraft, keyed by icao24"
+            ),
             "/api/sensors": "returns information about all sensors",
             "/docs": "interactive OpenAPI documentation",
         },
@@ -130,6 +133,23 @@ def track_stmt(aircraft_id: int, since: int | None) -> Select:
     if since is not None:
         stmt = stmt.where(AircraftPosition.timestamp >= since)
     return stmt.order_by(AircraftPosition.timestamp)
+
+
+def tracks_stmt(since: int) -> Select:
+    """
+    Every aircraft's positions since ``since``, oldest first, with the icao24.
+
+    Seeks the ``timestamp`` index and takes its order, which is also each
+    aircraft's own order, so the caller can group without sorting. The map
+    polls this with ``since`` set to the newest timestamp it has, so after the
+    first call the result is just the last second or so of positions.
+    """
+    return (
+        select(Aircraft.icao24, AircraftPosition)
+        .join(Aircraft, Aircraft.id == AircraftPosition.aircraft_id)
+        .where(AircraftPosition.timestamp >= since)
+        .order_by(AircraftPosition.timestamp)
+    )
 
 
 def create_app(
@@ -340,6 +360,53 @@ def create_app(
             )
             for pos in positions
         ]
+
+    @app.get("/api/tracks", response_model=dict[str, list[TrackPointSchema]])
+    async def get_all_tracks(
+        max_age: int | None = max_age_query,
+        since: int | None = Query(
+            None,
+            description=(
+                "Unix timestamp; only positions at or after it. Overrides max_age, "
+                "so a client can fetch just the positions it has not seen yet."
+            ),
+        ),
+        session: Session = Depends(get_session),
+    ):
+        """
+        Get the trajectories of every aircraft with positions in the window.
+
+        This is the map's single source for track lines: it seeds from the
+        ``max_age`` window and then polls with ``since`` for new points, and the
+        selected aircraft's line is the same data highlighted. Aircraft with no
+        positions in the window are omitted.
+
+        Parameters
+        ----------
+        max_age : int, optional
+            Window in seconds, defaulting to the backend's stale timeout
+        since : int, optional
+            Unix timestamp overriding the window
+        session : Session
+            Database session
+
+        Returns
+        -------
+        dict[str, list[TrackPointSchema]]
+            Track points per icao24, oldest first
+        """
+        cutoff = since if since is not None else seen_since(max_age)
+        tracks: dict[str, list[TrackPointSchema]] = {}
+        for icao24, pos in session.execute(tracks_stmt(cutoff)):
+            tracks.setdefault(icao24, []).append(
+                TrackPointSchema(
+                    timestamp=pos.timestamp,
+                    latitude=pos.latitude,
+                    longitude=pos.longitude,
+                    altitude=pos.altitude,
+                )
+            )
+        return tracks
 
     @app.get("/api/sensors", response_model=list[SensorSchema])
     async def get_sensors(session: Session = Depends(get_session)):

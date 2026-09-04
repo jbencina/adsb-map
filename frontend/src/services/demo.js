@@ -3,7 +3,7 @@
  *
  * A fixed fleet flies dead-reckoned paths around the default map center and
  * turns for home when it drifts out of range, so the map never empties. The
- * shapes returned match the backend's /api/all and /api/track responses.
+ * shapes returned match the backend's /api/all and /api/tracks responses.
  */
 
 import { DEFAULT_MAP_CENTER } from '../constants'
@@ -157,9 +157,13 @@ export class DemoFleet {
     }))
   }
 
-  /** Trajectory for one aircraft, shaped like /api/track. */
-  track(icao24, sinceSeconds = 0) {
-    const entry = this.entries.find(e => e.ac.icao24 === icao24)
-    return entry ? entry.history.filter(p => p.timestamp >= sinceSeconds) : []
+  /** Every aircraft's trajectory since a timestamp, shaped like /api/tracks. */
+  tracks(sinceSeconds = 0) {
+    const out = {}
+    for (const e of this.entries) {
+      const points = e.history.filter(p => p.timestamp >= sinceSeconds)
+      if (points.length) out[e.ac.icao24] = points
+    }
+    return out
   }
 }

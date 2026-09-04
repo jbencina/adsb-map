@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import AircraftMap from './components/AircraftMap'
 import { useAircraftData } from './hooks/useAircraftData'
 import { useAircraftTracks } from './hooks/useAircraftTracks'
 import { useFilteredAircraft } from './hooks/useFilteredAircraft'
+import { hasPosition } from './aircraft'
+import BoundedNumberInput from './components/BoundedNumberInput'
 import { useTheme } from './hooks/useTheme'
 import {
   MAPBOX_TOKEN,
@@ -41,11 +43,14 @@ function App() {
   // Theme management
   const { themePreference, appliedTheme, setTheme } = useTheme()
 
-  // Fetch aircraft data with polling
-  const { aircraft, loading, error, lastUpdate } = useAircraftData(refreshInterval)
+  // Fetch aircraft data with polling; the backend filters by age server-side
+  const { aircraft, loading, error, lastUpdate } = useAircraftData(refreshInterval, maxAgeMinutes)
 
-  // Filter aircraft based on age
+  // Re-apply the age filter locally so aircraft drop off between polls
   const filteredAircraft = useFilteredAircraft(aircraft, maxAgeMinutes)
+
+  // The header counts what the map draws; position-less aircraft are still tracked but invisible
+  const onMapCount = useMemo(() => filteredAircraft.filter(hasPosition).length, [filteredAircraft])
 
   // Track aircraft flight paths
   const { tracks } = useAircraftTracks(aircraft, maxAgeMinutes)
@@ -85,12 +90,9 @@ function App() {
               </span>
             ) : (
               <>
-                <span
-                  className="aircraft-count"
-                  aria-label={`${filteredAircraft.length} aircraft currently tracked`}
-                >
+                <span className="aircraft-count" aria-label={`${onMapCount} aircraft on the map`}>
                   <span className={`live-dot ${error ? 'stale' : ''}`} aria-hidden="true" />
-                  {filteredAircraft.length} aircraft
+                  {onMapCount} aircraft
                 </span>
                 {lastUpdate && (
                   <span
@@ -142,13 +144,12 @@ function App() {
                 <div className="control-row refresh-interval-input">
                   <label htmlFor="refresh-interval">Refresh interval</label>
                   <div className="field">
-                    <input
+                    <BoundedNumberInput
                       id="refresh-interval"
-                      type="number"
                       min={REFRESH_INTERVAL_MIN}
                       max={REFRESH_INTERVAL_MAX}
                       value={refreshInterval}
-                      onChange={e => setRefreshInterval(Number(e.target.value))}
+                      onChange={setRefreshInterval}
                       aria-label="Set refresh interval in seconds"
                       aria-describedby="refresh-interval-desc"
                     />
@@ -165,13 +166,12 @@ function App() {
                 <div className="control-row max-age-input">
                   <label htmlFor="max-age">Max age</label>
                   <div className="field">
-                    <input
+                    <BoundedNumberInput
                       id="max-age"
-                      type="number"
                       min={MAX_AGE_MIN}
                       max={MAX_AGE_MAX}
                       value={maxAgeMinutes}
-                      onChange={e => setMaxAgeMinutes(Number(e.target.value))}
+                      onChange={setMaxAgeMinutes}
                       aria-label="Set maximum age of aircraft data in minutes"
                       aria-describedby="max-age-desc"
                     />

@@ -13,6 +13,7 @@ from collections.abc import Callable
 
 from sqlalchemy import func
 
+from adsb.api import DEFAULT_STALE_TIMEOUT
 from adsb.database import Database
 from adsb.models import Aircraft
 from adsb.network import ADSBNetworkClient
@@ -20,13 +21,21 @@ from adsb.network import ADSBNetworkClient
 logger = logging.getLogger("adsb.status")
 
 
-def tracked_counts(database: Database) -> tuple[int, int]:
-    """Return (aircraft currently tracked, of which have a position)."""
+def tracked_counts(database: Database, max_age: int) -> tuple[int, int]:
+    """
+    Return (aircraft seen within ``max_age`` seconds, of which have a position).
+
+    Old aircraft are kept in the database for offline analysis, so this counts
+    the window the API serves by default rather than every row in the file.
+    """
+    cutoff = int(time.time()) - max_age
     with database.get_session() as session:
         # count(column) skips NULLs; latitude and longitude are always set together.
-        total, with_pos = session.query(
-            func.count(Aircraft.id), func.count(Aircraft.latitude)
-        ).one()
+        total, with_pos = (
+            session.query(func.count(Aircraft.id), func.count(Aircraft.latitude))
+            .filter(Aircraft.lastseen >= cutoff)
+            .one()
+        )
     return total, with_pos
 
 
@@ -95,6 +104,8 @@ class StatusReporter:
         Seconds between lines
     emit : callable, optional
         Where lines go; defaults to the ``adsb.status`` logger
+    stale_timeout : int, optional
+        Window in seconds for the "tracking" count, matching the API's default
     """
 
     def __init__(
@@ -103,11 +114,13 @@ class StatusReporter:
         client: ADSBNetworkClient | None,
         interval: float = 10.0,
         emit: Callable[[str], None] | None = None,
+        stale_timeout: int = DEFAULT_STALE_TIMEOUT,
     ):
         self.database = database
         self.client = client
         self.interval = interval
         self.emit = emit or logger.info
+        self.stale_timeout = stale_timeout
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="adsb-status", daemon=True)
 
@@ -120,7 +133,7 @@ class StatusReporter:
     def tick(self) -> str:
         """Build and emit one status line."""
         stats = self.client.snapshot() if self.client is not None else None
-        tracked, with_pos = tracked_counts(self.database)
+        tracked, with_pos = tracked_counts(self.database, self.stale_timeout)
         line = format_status(
             feed=self.feed,
             stats=stats,

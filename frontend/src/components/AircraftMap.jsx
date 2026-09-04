@@ -17,6 +17,7 @@ import {
   AIRCRAFT_GLYPH,
   SIGNAL_COLORS,
 } from '../constants'
+import { hasPosition } from '../aircraft'
 import { aircraftRssi, signalColor, signalLevel } from '../signal'
 import AircraftTags from './AircraftTags'
 import SignalBars from './SignalBars'
@@ -60,7 +61,7 @@ function AircraftMap({
   useEffect(() => {
     if (!hasInitialized && aircraft.length > 0 && mapRef.current) {
       // Calculate center of all aircraft
-      const validAircraft = aircraft.filter(a => a.latitude && a.longitude)
+      const validAircraft = aircraft.filter(hasPosition)
       if (validAircraft.length > 0) {
         const avgLat = validAircraft.reduce((sum, a) => sum + a.latitude, 0) / validAircraft.length
         const avgLon = validAircraft.reduce((sum, a) => sum + a.longitude, 0) / validAircraft.length
@@ -165,7 +166,7 @@ function AircraftMap({
   }, [selectedAircraft, onTrackingAircraft])
 
   // Filter aircraft with valid positions
-  const validAircraft = useMemo(() => aircraft.filter(a => a.latitude && a.longitude), [aircraft])
+  const validAircraft = useMemo(() => aircraft.filter(hasPosition), [aircraft])
 
   // The selection is a snapshot from click time; the card reads the live record so it keeps
   // updating, and falls back to the snapshot once the aircraft has aged out of the list

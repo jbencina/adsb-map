@@ -24,7 +24,8 @@ class ADSBDecoder:
     session : Session
         SQLAlchemy database session
     stale_timeout : int, optional
-        Seconds after which aircraft are removed from active tracking, by default 60
+        Age in seconds used by :meth:`cleanup_stale_aircraft`, by default 60. Nothing
+        calls that automatically; it backs the manual ``adsb cleanup`` command.
     """
 
     def __init__(
@@ -354,7 +355,10 @@ class ADSBDecoder:
 
     def cleanup_stale_aircraft(self) -> int:
         """
-        Remove aircraft not seen within stale timeout.
+        Remove aircraft not seen within stale timeout, with their positions and metadata.
+
+        This is an explicit, opt-in purge (``adsb cleanup``). The running backend never
+        deletes anything so the database stays available for offline analysis.
 
         Returns
         -------

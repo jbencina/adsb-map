@@ -1,5 +1,6 @@
 """Tests for FastAPI endpoints."""
 
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -75,7 +76,8 @@ def test_get_all_aircraft_with_data(test_session, client, aircraft):
 
 def test_get_icao24_addresses(test_session, client, aircraft):
     """Test getting all ICAO addresses."""
-    aircraft2 = Aircraft(icao24="def456", firstseen=1234567890, lastseen=1234567890, count=1)
+    now = int(time.time())
+    aircraft2 = Aircraft(icao24="def456", firstseen=now, lastseen=now, count=1)
     test_session.add(aircraft2)
     test_session.commit()
 
@@ -85,6 +87,38 @@ def test_get_icao24_addresses(test_session, client, aircraft):
     assert len(data) == 2
     assert "abc123" in data
     assert "def456" in data
+
+
+@pytest.fixture
+def old_and_new(test_session, aircraft):
+    """The sample aircraft plus one last seen ten minutes ago."""
+    now = int(time.time())
+    test_session.add(Aircraft(icao24="old123", firstseen=now - 700, lastseen=now - 600, count=1))
+    test_session.commit()
+
+
+def test_all_hides_aircraft_older_than_stale_timeout_by_default(client, old_and_new):
+    """Without max_age, /api/all and /api/icao24 show only currently tracked aircraft."""
+    assert [a["icao24"] for a in client.get("/api/all").json()] == ["abc123"]
+    assert client.get("/api/icao24").json() == ["abc123"]
+
+
+def test_all_max_age_widens_the_window(client, old_and_new):
+    """max_age (seconds) brings older aircraft back instead of them being gone for good."""
+    assert {a["icao24"] for a in client.get("/api/all?max_age=3600").json()} == {"abc123", "old123"}
+    assert set(client.get("/api/icao24?max_age=3600").json()) == {"abc123", "old123"}
+    assert [a["icao24"] for a in client.get("/api/all?max_age=300").json()] == ["abc123"]
+
+
+def test_all_max_age_must_be_positive(client):
+    assert client.get("/api/all?max_age=0").status_code == 422
+    assert client.get("/api/all?max_age=-5").status_code == 422
+
+
+def test_create_app_stale_timeout_sets_default_window(test_db, test_session, old_and_new):
+    """The backend's --stale-timeout is the default max_age."""
+    client = TestClient(create_app(test_db, stale_timeout=3600))
+    assert {a["icao24"] for a in client.get("/api/all").json()} == {"abc123", "old123"}
 
 
 def test_get_track_not_found(client):

@@ -108,7 +108,10 @@ def start():
 @click.option(
     "--stale-timeout",
     default=60,
-    help="Seconds before removing stale aircraft",
+    help=(
+        "Seconds after which an aircraft is hidden from /api/all unless the caller asks "
+        "for a wider max_age. Nothing is deleted; use `adsb cleanup` to purge."
+    ),
     show_default=True,
 )
 @click.option(
@@ -243,14 +246,13 @@ def backend(
             port=net_port,
             rawtype=net_type,
             database=database,
-            stale_timeout=stale_timeout,
             lat_ref=lat,
             lon_ref=lon,
         )
         click.echo("Network decoder started successfully")
 
     # Create FastAPI app with network client for graceful shutdown
-    app = create_app(database, network_client)
+    app = create_app(database, network_client, stale_timeout=stale_timeout)
 
     db = aircraft_db_path()
     _echo_checks(
@@ -270,7 +272,9 @@ def backend(
 
     reporter = None
     if stats_interval > 0:
-        reporter = StatusReporter(database, network_client, interval=stats_interval).start()
+        reporter = StatusReporter(
+            database, network_client, interval=stats_interval, stale_timeout=stale_timeout
+        ).start()
 
     # uvicorn handles signals and triggers the FastAPI lifespan shutdown.
     click.echo(f"Starting API server on http://{host}:{port}/")
@@ -405,16 +409,23 @@ def decode(message: str, db_path: str):
     help="Path to SQLite database file",
     show_default=True,
 )
-def cleanup(db_path: str):
+@click.option(
+    "--stale-timeout",
+    default=60,
+    help="Delete aircraft (and their history) not seen in this many seconds",
+    show_default=True,
+)
+def cleanup(db_path: str, stale_timeout: int):
     """
-    Clean up stale aircraft from the database.
+    Purge stale aircraft from the database.
 
-    Removes aircraft that haven't been seen in the last 60 seconds.
+    The running backend never deletes anything, so the database can be analysed
+    offline. Run this only when you want to reclaim space.
     """
     database = Database(db_path)
 
     with database.get_session() as session:
-        decoder = ADSBDecoder(session)
+        decoder = ADSBDecoder(session, stale_timeout=stale_timeout)
         count = decoder.cleanup_stale_aircraft()
 
     click.echo(f"Removed {count} stale aircraft")

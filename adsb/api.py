@@ -4,6 +4,7 @@ API only: the map UI is a separate service (`adsb start frontend`, see `adsb.ui`
 that proxies to this one, so nothing here serves HTML, static files or CORS.
 """
 
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Query
@@ -16,6 +17,7 @@ from adsb.schemas import AircraftStateSchema, SensorSchema, TrackPointSchema
 
 # Constants
 MAX_METADATA_RECORDS = 4  # Match jet1090 API format - last 4 reception metadata
+DEFAULT_STALE_TIMEOUT = 60  # Seconds; aircraft older than this are hidden unless asked for
 
 # Global instances
 db_instance: Database | None = None
@@ -27,8 +29,8 @@ def api_index() -> dict:
     return {
         "message": "Welcome to the ADS-B REST API!",
         "routes": {
-            "/api/all": "returns all current state vectors",
-            "/api/icao24": "returns all ICAO 24-bit addresses seen",
+            "/api/all": "returns all current state vectors (?max_age=SECONDS widens the window)",
+            "/api/icao24": "returns all ICAO 24-bit addresses seen (?max_age=SECONDS as above)",
             "/api/track?icao24={icao24}&since={timestamp}": (
                 "returns the trajectory of a given aircraft"
             ),
@@ -72,7 +74,9 @@ def get_session():
         yield session
 
 
-def create_app(database: Database, network_client=None) -> FastAPI:
+def create_app(
+    database: Database, network_client=None, stale_timeout: int = DEFAULT_STALE_TIMEOUT
+) -> FastAPI:
     """
     Create and configure FastAPI application.
 
@@ -82,6 +86,10 @@ def create_app(database: Database, network_client=None) -> FastAPI:
         Database instance
     network_client : ADSBNetworkClient, optional
         Network client instance for graceful shutdown
+    stale_timeout : int, optional
+        Default ``max_age`` window in seconds for ``/api/all`` and ``/api/icao24``.
+        Aircraft last seen longer ago than this stay in the database but are only
+        returned when a caller asks for a wider ``max_age``.
 
     Returns
     -------
@@ -127,13 +135,33 @@ def create_app(database: Database, network_client=None) -> FastAPI:
     async def root():
         return api_index()
 
+    max_age_query = Query(
+        None,
+        ge=1,
+        description=(
+            "Only aircraft seen within this many seconds. "
+            f"Defaults to the backend's stale timeout ({stale_timeout}s)."
+        ),
+    )
+
+    def seen_since(max_age: int | None) -> int:
+        """Unix timestamp before which an aircraft is outside the requested window."""
+        return int(time.time()) - (max_age if max_age is not None else stale_timeout)
+
     @app.get("/api/all", response_model=list[AircraftStateSchema])
-    async def get_all_aircraft(session: Session = Depends(get_session)):
+    async def get_all_aircraft(
+        max_age: int | None = max_age_query, session: Session = Depends(get_session)
+    ):
         """
         Get all currently tracked aircraft.
 
+        Nothing is ever purged, so widening ``max_age`` brings back aircraft that
+        have aged out of the default window.
+
         Parameters
         ----------
+        max_age : int, optional
+            Only aircraft seen within this many seconds
         session : Session
             Database session
 
@@ -142,7 +170,9 @@ def create_app(database: Database, network_client=None) -> FastAPI:
         list[AircraftStateSchema]
             List of aircraft state vectors
         """
-        aircraft_list = session.query(Aircraft).all()
+        aircraft_list = (
+            session.query(Aircraft).filter(Aircraft.lastseen >= seen_since(max_age)).all()
+        )
 
         result = []
         for aircraft in aircraft_list:
@@ -193,12 +223,16 @@ def create_app(database: Database, network_client=None) -> FastAPI:
         return result
 
     @app.get("/api/icao24", response_model=list[str])
-    async def get_all_icao24(session: Session = Depends(get_session)):
+    async def get_all_icao24(
+        max_age: int | None = max_age_query, session: Session = Depends(get_session)
+    ):
         """
         Get all ICAO 24-bit addresses currently tracked.
 
         Parameters
         ----------
+        max_age : int, optional
+            Only aircraft seen within this many seconds
         session : Session
             Database session
 
@@ -207,7 +241,9 @@ def create_app(database: Database, network_client=None) -> FastAPI:
         list[str]
             List of ICAO 24-bit addresses
         """
-        aircraft_list = session.query(Aircraft.icao24).all()
+        aircraft_list = (
+            session.query(Aircraft.icao24).filter(Aircraft.lastseen >= seen_since(max_age)).all()
+        )
         return [aircraft[0] for aircraft in aircraft_list]
 
     @app.get("/api/track", response_model=list[TrackPointSchema])

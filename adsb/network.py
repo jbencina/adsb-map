@@ -264,11 +264,15 @@ class ADSBNetworkClient(TcpClient):
             # Trim reception metadata now and then; it is only shown for live aircraft.
             now = time.time()
             if self.metadata_retention > 0 and now - self.last_cleanup >= self.cleanup_interval:
-                removed = decoder.purge_old_metadata(self.metadata_retention, now=now)
-                if removed:
-                    adsb_logger.debug(
-                        f"Purged {removed} metadata rows older than {self.metadata_retention}s"
-                    )
+                try:
+                    removed = decoder.purge_old_metadata(self.metadata_retention, now=now)
+                except Exception as e:  # housekeeping must never take the feed down
+                    adsb_logger.warning(f"Metadata purge failed, will retry: {e}")
+                else:
+                    if removed:
+                        adsb_logger.debug(
+                            f"Purged {removed} metadata rows older than {self.metadata_retention}s"
+                        )
                 self.last_cleanup = now
 
             # One lock per batch rather than per message; the reporter only

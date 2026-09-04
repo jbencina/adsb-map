@@ -413,3 +413,41 @@ def test_latest_metadata_query_uses_index(test_db):
 
     assert not any("SCAN aircraft_metadata" in step for step in plan), plan
     assert any("ix_aircraft_metadata_aircraft_id_system_timestamp" in step for step in plan), plan
+
+
+def test_all_metadata_ties_break_on_newest_row(test_session, client):
+    """Frames from one socket read share a timestamp; the latest-inserted rows must win."""
+    now = int(time.time())
+    a = Aircraft(icao24="tie111", firstseen=now, lastseen=now, count=1)
+    test_session.add(a)
+    test_session.flush()
+    test_session.execute(
+        insert(AircraftMetadata),
+        [
+            {"aircraft_id": a.id, "system_timestamp": now - 1.0, "nanoseconds": i, "rssi": -10.0}
+            for i in range(6)
+        ],
+    )
+    test_session.commit()
+
+    data = client.get("/api/all?max_age=300").json()
+
+    assert [m["nanoseconds"] for m in data[0]["metadata"]] == [5, 4, 3, 2]
+
+
+def test_track_query_uses_aircraft_position_index(test_db):
+    """/api/track must seek one aircraft's positions, not walk every aircraft's since the cutoff."""
+    from sqlalchemy.dialects import sqlite
+
+    from adsb.api import track_stmt
+
+    sql = str(
+        track_stmt(aircraft_id=1, since=0).compile(
+            dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+    with test_db.engine.connect() as conn:
+        plan = [row[-1] for row in conn.execute(text(f"EXPLAIN QUERY PLAN {sql}"))]
+
+    assert any("ix_aircraft_positions_aircraft_id_timestamp" in step for step in plan), plan
+    assert not any("TEMP B-TREE" in step for step in plan), plan

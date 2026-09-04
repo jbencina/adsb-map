@@ -120,7 +120,7 @@ paths (proxied) plus the map itself.
 | `GET /api/all?max_age={seconds}` | Aircraft state vectors seen within `max_age` (default: `--stale-timeout`) |
 | `GET /api/icao24?max_age={seconds}` | ICAO24 addresses seen within `max_age` (default: `--stale-timeout`) |
 | `GET /api/track?icao24={icao24}&since={ts}` | Trajectory for one aircraft |
-| `GET /api/sensors` | Receiver/sensor info (serials) |
+| `GET /api/sensors` | Receiver/sensor serials heard within `--metadata-retention` |
 | `GET /api` | API discovery (welcome JSON) |
 
 The backend never deletes aircraft or their positions. `--stale-timeout` only sets the

@@ -398,3 +398,26 @@ def test_handle_messages_purges_once_per_cleanup_interval(test_db):
         event.remove(test_db.engine, "before_cursor_execute", spy)
 
     assert len(deletes) == 1
+
+
+def test_handle_messages_survives_purge_failure(test_db):
+    """A failing purge must not take the decoder thread (and the feed) down with it."""
+    from adsb.decoder import ADSBDecoder
+
+    client = ADSBNetworkClient(
+        host="localhost",
+        port=1,
+        rawtype="beast",
+        database=test_db,
+        metadata_retention=3600,
+        cleanup_interval=0,
+    )
+
+    def boom(self, retention, now=None):
+        raise RuntimeError("database is locked")
+
+    with patch.object(ADSBDecoder, "purge_old_metadata", boom):
+        client.handle_messages([(LONG_MSG, time.time(), -12.5)])
+
+    with test_db.get_session() as session:
+        assert session.query(Aircraft).filter_by(icao24="4840d6").first() is not None

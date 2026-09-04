@@ -7,6 +7,7 @@ from pathlib import Path
 
 from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.schema import CreateIndex
 
 from adsb.models import Base
 
@@ -73,7 +74,9 @@ class Database:
             for index in table.indexes:
                 if index.name not in existing:
                     logger.info("Creating index %s on %s", index.name, table.name)
-                    index.create(bind=self.engine)
+                    # IF NOT EXISTS: another process may have won the race since we looked.
+                    with self.engine.begin() as conn:
+                        conn.execute(CreateIndex(index, if_not_exists=True))
 
     def dispose(self) -> None:
         """Dispose of the connection pool and close all connections."""

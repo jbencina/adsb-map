@@ -14,7 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (7 s per poll on a 2M-row database, polled every second). The newest rows for all
   aircraft now come from a single statement that seeks a new
   `(aircraft_id, system_timestamp)` index, and `aircraft.lastseen` (the `max_age` filter)
-  is indexed too. Existing databases get the indexes on the next start.
+  is indexed too. `/api/track` gets an `(aircraft_id, timestamp)` index for the same
+  reason, since positions are retained forever. Existing databases get the indexes on
+  the next start.
+- `/api/sensors` now lists receivers heard within `--metadata-retention`, since its
+  source table is trimmed to that window.
 
 ### Added
 - `--metadata-retention SECONDS` on `start backend` / `start all` (default 3600, 0 to

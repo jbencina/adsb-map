@@ -85,13 +85,14 @@ def latest_metadata_stmt(cutoff: int, limit: int = MAX_METADATA_RECORDS) -> Sele
     is O(aircraft in window) regardless of how much history the table holds. A
     window function would read every row of every in-window aircraft instead.
 
-    Rows come back grouped by aircraft, newest first within each group.
+    Rows come back grouped by aircraft, newest first within each group. Frames
+    parsed from one socket read share a timestamp, so ``id`` breaks ties.
     """
     t = aliased(AircraftMetadata)
     latest_ids = (
         select(t.id)
         .where(t.aircraft_id == Aircraft.id)
-        .order_by(t.system_timestamp.desc())
+        .order_by(t.system_timestamp.desc(), t.id.desc())
         .limit(limit)
         .correlate(Aircraft)
         .scalar_subquery()
@@ -100,8 +101,26 @@ def latest_metadata_stmt(cutoff: int, limit: int = MAX_METADATA_RECORDS) -> Sele
         select(AircraftMetadata)
         .join(Aircraft, AircraftMetadata.id.in_(latest_ids))
         .where(Aircraft.lastseen >= cutoff)
-        .order_by(AircraftMetadata.aircraft_id, AircraftMetadata.system_timestamp.desc())
+        .order_by(
+            AircraftMetadata.aircraft_id,
+            AircraftMetadata.system_timestamp.desc(),
+            AircraftMetadata.id.desc(),
+        )
     )
+
+
+def track_stmt(aircraft_id: int, since: int | None) -> Select:
+    """
+    One aircraft's positions since ``since`` (all of them if None), oldest first.
+
+    Seeks the ``(aircraft_id, timestamp)`` index, which also supplies the order.
+    Positions are retained forever, so the global timestamp index alone would
+    walk every aircraft's points since the cutoff.
+    """
+    stmt = select(AircraftPosition).where(AircraftPosition.aircraft_id == aircraft_id)
+    if since is not None:
+        stmt = stmt.where(AircraftPosition.timestamp >= since)
+    return stmt.order_by(AircraftPosition.timestamp)
 
 
 def create_app(
@@ -303,12 +322,7 @@ def create_app(
         if aircraft is None:
             return []
 
-        query = session.query(AircraftPosition).filter_by(aircraft_id=aircraft.id)
-
-        if since is not None:
-            query = query.filter(AircraftPosition.timestamp >= since)
-
-        positions = query.order_by(AircraftPosition.timestamp).all()
+        positions = session.execute(track_stmt(aircraft.id, since)).scalars().all()
 
         return [
             TrackPointSchema(
@@ -323,7 +337,11 @@ def create_app(
     @app.get("/api/sensors", response_model=list[SensorSchema])
     async def get_sensors(session: Session = Depends(get_session)):
         """
-        Get information about all sensors/receivers.
+        Get information about recently active sensors/receivers.
+
+        Serials come from reception metadata, which the backend trims to its
+        ``--metadata-retention`` window (an hour by default), so a receiver that
+        has been silent longer than that drops off this list.
 
         Parameters
         ----------

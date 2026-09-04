@@ -52,3 +52,19 @@ def test_create_tables_is_idempotent(test_db):
     assert {t: index_names(test_db, t) for t in NEW_INDEXES} == before
     for table, name in NEW_INDEXES.items():
         assert name in before[table]
+
+
+def test_ensure_indexes_tolerates_index_created_meanwhile(test_db, monkeypatch):
+    """Two processes starting at once must not fail on the second CREATE INDEX."""
+    import adsb.database
+
+    class BlindInspector:
+        def get_indexes(self, table):
+            return []
+
+    monkeypatch.setattr(adsb.database, "inspect", lambda engine: BlindInspector())
+
+    test_db.create_tables()  # indexes already exist; must not raise
+
+    for table, name in NEW_INDEXES.items():
+        assert name in index_names(test_db, table)

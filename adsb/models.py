@@ -61,6 +61,10 @@ class AircraftPosition(Base):
     """
 
     __tablename__ = "aircraft_positions"
+    # /api/track reads one aircraft's points since a cutoff, in time order.
+    __table_args__ = (
+        Index("ix_aircraft_positions_aircraft_id_timestamp", "aircraft_id", "timestamp"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     aircraft_id: Mapped[int] = mapped_column(Integer, ForeignKey("aircraft.id"), nullable=False)

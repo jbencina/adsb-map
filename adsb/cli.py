@@ -2,6 +2,7 @@
 
 import logging
 import os
+import signal
 import threading
 import warnings
 
@@ -497,6 +498,25 @@ def all_(
         threading.Thread(target=_run, args=(name, server), name=f"adsb-{name}", daemon=True)
         for name, server in servers.items()
     ]
+
+    # uvicorn installs its signal handlers only on the main thread, so neither
+    # threaded server sees a shutdown signal. Relay them ourselves by setting
+    # should_exit, which is what runs the FastAPI lifespan shutdown (and so closes
+    # the Beast socket and the UI's HTTP client). Ctrl-C arrives as
+    # KeyboardInterrupt below; SIGTERM -- how systemd, Docker and plain `kill` stop
+    # the process -- has to be caught here or it terminates us outright. Installed
+    # before the threads start, so there is no window where a signal is missed.
+    stopping = False
+
+    def _handle_sigterm(signum, frame) -> None:
+        nonlocal stopping
+        stopping = True
+        click.echo("\nShutting down...")
+        for server in servers.values():
+            server.should_exit = True
+
+    previous_sigterm = signal.signal(signal.SIGTERM, _handle_sigterm)
+
     for thread in threads:
         thread.start()
 
@@ -505,20 +525,17 @@ def all_(
         f"frontend=http://{host}:{frontend_port}"
     )
 
-    # uvicorn only installs signal handlers on the main thread, so neither server
-    # sees Ctrl-C from here. Catch it ourselves and ask both to stop, which is what
-    # runs the FastAPI lifespan shutdown (and so stops the network client).
-    interrupted = False
     try:
         first_exit.wait()
     except KeyboardInterrupt:
-        interrupted = True
+        stopping = True
         click.echo("\nShutting down...")
     finally:
         for server in servers.values():
             server.should_exit = True
         for thread in threads:
             thread.join(timeout=SHUTDOWN_TIMEOUT)
+        signal.signal(signal.SIGTERM, previous_sigterm)
         if reporter:
             reporter.stop()
 
@@ -530,7 +547,7 @@ def all_(
             else f"{err.__class__.__name__}: {err}"
         )
         raise click.ClickException(f"{name} stopped: {detail}")
-    if not interrupted:
+    if not stopping:
         raise click.ClickException(f"{finished[0]} stopped unexpectedly")
 
 

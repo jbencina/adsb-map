@@ -1,6 +1,7 @@
 """Tests for CLI behavior (click group, environment loading)."""
 
 import os
+import signal
 import sys
 import threading
 import time
@@ -299,6 +300,30 @@ def test_start_all_shuts_both_down_on_interrupt(
     assert "Shutting down" in result.output
     assert all(server.should_exit for server in fake_servers.servers)
     assert all(server.ran for server in fake_servers.servers)
+
+
+def test_start_all_shuts_both_down_on_sigterm(tmp_path, monkeypatch, built_frontend, fake_servers):
+    """systemd, Docker and `kill` stop with SIGTERM, which no worker thread sees."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MAPBOX_TOKEN", "pk.local")
+
+    def signal_then_serve(server):
+        """Stand in for `kill <pid>` arriving once both services are up."""
+        os.kill(os.getpid(), signal.SIGTERM)
+        while not server.should_exit:
+            time.sleep(0.005)
+
+    fake_servers.behaviors[8800] = signal_then_serve
+    before = signal.getsignal(signal.SIGTERM)
+
+    result = run_start_all(tmp_path, "--backend-port", "8800", "--frontend-port", "3456")
+
+    assert result.exit_code == 0, result.output
+    assert "Shutting down" in result.output
+    assert all(server.should_exit for server in fake_servers.servers)
+    assert all(server.ran for server in fake_servers.servers)
+    # The command must not leave its handler behind for whatever runs next.
+    assert signal.getsignal(signal.SIGTERM) is before
 
 
 def test_frontend_defaults_to_local_backend(tmp_path, monkeypatch, built_frontend, no_uvicorn):

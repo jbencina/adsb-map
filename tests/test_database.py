@@ -5,11 +5,14 @@ from sqlalchemy import inspect, text
 from adsb.database import Database
 
 # Indexes added after the first release, which existing database files lack.
-NEW_INDEXES = {
-    "aircraft": "ix_aircraft_lastseen",
-    "aircraft_metadata": "ix_aircraft_metadata_aircraft_id_system_timestamp",
-    "aircraft_positions": "ix_aircraft_positions_aircraft_id_timestamp",
-}
+NEW_INDEXES = [
+    ("aircraft", "ix_aircraft_lastseen"),
+    ("aircraft", "ix_aircraft_count"),
+    ("aircraft_metadata", "ix_aircraft_metadata_aircraft_id_system_timestamp"),
+    ("aircraft_positions", "ix_aircraft_positions_aircraft_id_timestamp"),
+    ("aircraft_hourly", "ix_aircraft_hourly_hour"),
+]
+NEW_INDEX_TABLES = sorted({table for table, _ in NEW_INDEXES})
 
 
 def index_names(database: Database, table: str) -> set[str]:
@@ -33,22 +36,22 @@ def test_create_tables_adds_missing_indexes_to_existing_db(tmp_path):
     database = Database(path)
     database.create_tables()
     with database.engine.begin() as conn:
-        for name in NEW_INDEXES.values():
+        for _, name in NEW_INDEXES:
             conn.execute(text(f"DROP INDEX {name}"))
-    for table, name in NEW_INDEXES.items():
+    for table, name in NEW_INDEXES:
         assert name not in index_names(database, table)
     database.dispose()
 
     reopened = Database(path)
     reopened.create_tables()
     try:
-        for table, name in NEW_INDEXES.items():
+        for table, name in NEW_INDEXES:
             assert name in index_names(reopened, table)
     finally:
         reopened.dispose()
 
 
 def test_create_tables_is_idempotent(test_db):
-    before = {t: index_names(test_db, t) for t in NEW_INDEXES}
+    before = {t: index_names(test_db, t) for t in NEW_INDEX_TABLES}
     test_db.create_tables()
-    assert {t: index_names(test_db, t) for t in NEW_INDEXES} == before
+    assert {t: index_names(test_db, t) for t in NEW_INDEX_TABLES} == before

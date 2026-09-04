@@ -53,7 +53,7 @@ const ageOf = (ac, maxAgeMinutes, now) =>
  * @param {Object} props.map - The mapbox-gl map instance, once loaded
  * @param {Array} props.aircraft - Aircraft with valid positions
  * @param {string|null} props.selectedId - icao24 of the selected aircraft
- * @param {number} props.maxAgeMinutes - Age at which a contact expires, for the fade
+ * @param {number} props.maxAgeMinutes - Age at which a contact expires; fresher tags are placed first
  * @param {boolean} props.visible - Whether tags are shown at all
  * @returns {JSX.Element|null} The tag overlay
  */
@@ -123,8 +123,6 @@ function AircraftTags({ map, aircraft, selectedId, maxAgeMinutes, visible }) {
 
   if (!visible) return null
 
-  const now = Math.floor(Date.now() / 1000)
-
   return (
     <div className="tag-layer" ref={layerRef} aria-hidden="true">
       <svg className="tag-leaders">
@@ -142,7 +140,6 @@ function AircraftTags({ map, aircraft, selectedId, maxAgeMinutes, visible }) {
           key={ac.icao24}
           data-id={ac.icao24}
           className={`tag ${ac.icao24 === selectedId ? 'selected' : ''}`}
-          style={{ '--age': ageOf(ac, maxAgeMinutes, now) }}
           hidden
         >
           {labelFor(ac)}

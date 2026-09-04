@@ -7,6 +7,7 @@
     "dev:demo": "vite --mode demo",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "bun test",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "lint:fix": "eslint . --ext js,jsx --fix",
     "format": "prettier --write \"src/**/*.{js,jsx,json,css}\"",

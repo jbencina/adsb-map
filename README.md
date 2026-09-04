@@ -46,7 +46,8 @@ See [Running on separate machines](#running-on-separate-machines).
   the [tar1090-db](https://github.com/wiedehopf/tar1090-db) project (566k+ records)
 - **REST API** — FastAPI endpoints under `/api/*`, jet1090-compatible
 - **SQLite storage** — aircraft state, position history, reception metadata
-- **Interactive map** — React + Mapbox GL, prebuilt and shipped in the wheel
+- **Interactive map** — React + Mapbox GL, prebuilt and shipped in the wheel; signal-strength
+  indicator per aircraft and an optional shade-by-signal view of the markers
 - **Separate services** — backend on the receiver, frontend on any machine that can reach it
 - **Network data sources** — connects to dump1090 / readsb / modesdeco2 over TCP (Beast or raw)
 
@@ -175,6 +176,8 @@ The decoder connects to existing ADS-B receivers via TCP:
 - **readsb** — same ports as dump1090
 - **modesdeco2**, or any Beast / raw hex feed
 
+Signal strength (RSSI, in dBFS) is only available from Beast feeds; the raw hex format carries no signal level, so `rssi` stays `null` there and the map shows "No data" for signal.
+
 ```bash
 adsb start backend --source net --connect <host> <port> <beast|raw> --lat <lat> --lon <lon>
 ```
@@ -199,14 +202,14 @@ just bootstrap                                # installs bun if missing
 uv sync --dev
 uv run adsb download                          # one-time
 
-cp frontend/.env.example frontend/.env        # then set VITE_MAPBOX_TOKEN
+echo 'MAPBOX_TOKEN=pk.your_token_here' > .env    # shared by backend, bundled UI and Vite
 
 # Args after `dev` are passed straight through to `adsb start backend`.
 just dev --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 ```
 
 Visit http://localhost:3000/. Vite proxies `/api/*` to the backend on port 8000 and serves
-its own `/config.js` from `VITE_MAPBOX_TOKEN`, so the dev UI behaves exactly like
+its own `/config.js` from `MAPBOX_TOKEN` in the repo-root `.env`, so the dev UI behaves exactly like
 `adsb start frontend`. To run the halves separately: `just backend …` and
 `just dev-frontend [URL]` (Vite, proxying to `URL`, default `http://localhost:8000`).
 
@@ -232,7 +235,7 @@ uv run pre-commit install                     # one-time: enable git hooks
 uv run pre-commit run --all-files
 ```
 
-Frontend: `bun run lint`, `bun run format` from `frontend/`.
+Frontend: `bun run test`, `bun run lint`, `bun run format` from `frontend/`.
 
 Verify the wheel ships the bundled frontend (run before merging changes that
 touch packaging, the static mount, or the publish workflow):

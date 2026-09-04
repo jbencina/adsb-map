@@ -12,6 +12,9 @@ const FLEET_SIZE = 24
 const RANGE_DEG = 1.5 // distance from center that triggers a turn for home
 const HISTORY_SECONDS = 15 * 60
 const HISTORY_STEP = 5 // seconds between recorded track points
+const RSSI_SAMPLES = 4 // reception samples kept per aircraft, like /api/all
+const RSSI_NEAR = -10 // dBFS overhead ...
+const RSSI_FAR = -34 // ... and at the edge of range
 const MISSED_UPDATE_RATE = 0.05 // per-second chance a contact is not heard this tick
 const TURN_RATE = 2 // deg/s while turning
 const AIRLINES = ['UAL', 'SWA', 'DAL', 'AAL', 'ASA', 'SKW', 'JBU', 'FDX', 'UPS']
@@ -123,7 +126,15 @@ export class DemoFleet {
     const { ac } = e
     ac.lastseen = Math.floor(now / 1000)
     ac.count += 1
-    if (ac.latitude === null || now - e.lastRecorded < HISTORY_STEP * 1000) return
+    if (ac.latitude === null) return
+    // Signal falls off with distance from the receiver at the map center, plus a little noise
+    const dLat = ac.latitude - DEFAULT_MAP_CENTER.latitude
+    const dLon = (ac.longitude - DEFAULT_MAP_CENTER.longitude) * Math.cos(toRad(ac.latitude))
+    const reach = clamp(Math.hypot(dLat, dLon) / RANGE_DEG, 0, 1)
+    const rssi = RSSI_NEAR + (RSSI_FAR - RSSI_NEAR) * reach + between(this.rand, -2, 2)
+    ac.metadata.unshift({ system_timestamp: ac.lastseen, nanoseconds: 0, rssi, serial: null })
+    ac.metadata.length = Math.min(ac.metadata.length, RSSI_SAMPLES)
+    if (now - e.lastRecorded < HISTORY_STEP * 1000) return
     e.lastRecorded = now
     e.history.push({
       timestamp: ac.lastseen,
@@ -139,6 +150,7 @@ export class DemoFleet {
   all() {
     return this.entries.map(({ ac }) => ({
       ...ac,
+      metadata: ac.metadata.map(m => ({ ...m, rssi: Math.round(m.rssi * 10) / 10 })),
       altitude: Math.round(ac.altitude),
       groundspeed: Math.round(ac.groundspeed),
       track: Math.round(ac.track * 10) / 10,

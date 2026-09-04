@@ -272,3 +272,14 @@ def test_extract_nacp(test_session):
     # Test unknown typecode
     assert decoder._extract_nacp(99) is None
     assert decoder._extract_nacp(1) is None
+
+
+def test_process_message_stores_rssi(test_session):
+    """The rssi argument is stored on the reception metadata row."""
+    decoder = ADSBDecoder(test_session)
+
+    aircraft = decoder.process_message(
+        "8D4840D6202CC371C32CE0576098", timestamp=1234567890.0, rssi=-12.5
+    )
+
+    assert aircraft.reception_metadata[0].rssi == -12.5

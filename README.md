@@ -31,6 +31,9 @@ adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon
 # Export it, or put it in a `.env` file in the directory you run this from.
 export MAPBOX_TOKEN=pk.your_token_here
 adsb start frontend                          # add --api-url http://receiver:8000 if remote
+
+# Or run both in one command:
+adsb start all --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 ```
 
 Visit http://localhost:3000/. Aircraft show up as markers; click one for its track.
@@ -143,6 +146,15 @@ adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon
 
 # On your laptop (pip install adsb-map first; MAPBOX_TOKEN in env or .env):
 adsb start frontend --api-url http://receiver.local:8000
+```
+
+Or run both on one machine against a remote receiver. `adsb start all` binds to
+`127.0.0.1` by default; `--host` opens both services up and is also the address the
+UI proxies to, so pass it rather than relying on loopback:
+
+```bash
+adsb start all --host 0.0.0.0 --backend-port 8000 --frontend-port 3000 \
+  --source net --connect receiver.local 30005 beast --lat 40.7 --lon -74.0
 ```
 
 The frontend reverse-proxies `/api/*` to the backend, so the browser stays same-origin and

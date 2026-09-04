@@ -30,8 +30,10 @@ select {
 }
 
 #root {
-  width: 100vw;
+  width: 100%;
   height: 100vh;
+  /* Mobile browsers: track the visible area as the address bar shows and hides */
+  height: 100dvh;
 }
 
 @media (prefers-reduced-motion: reduce) {

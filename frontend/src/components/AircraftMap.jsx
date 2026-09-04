@@ -16,9 +16,11 @@ import {
   SELECTED_TRACK_WIDTH,
   AIRCRAFT_GLYPH,
   SIGNAL_COLORS,
+  AIRCRAFT_DB_CREDIT,
 } from '../constants'
 import { hasPosition } from '../aircraft'
 import { aircraftRssi, signalColor, signalLevel } from '../signal'
+import { useContinuousHeadings } from '../hooks/useContinuousHeadings'
 import AircraftTags from './AircraftTags'
 import SignalBars from './SignalBars'
 import './AircraftMap.css'
@@ -51,6 +53,10 @@ function AircraftMap({
   const [selectedAircraft, setSelectedAircraft] = useState(null)
   const [selectedAircraftTrack, setSelectedAircraftTrack] = useState(null)
   const [loadingTrack, setLoadingTrack] = useState(false)
+  // Serial of the latest history request, so a slow reply cannot overwrite a newer one,
+  // and which aircraft the drawn history belongs to, so only a new selection shows the indicator
+  const trackRequest = useRef(0)
+  const trackLoadedFor = useRef(null)
   const [viewport, setViewport] = useState(DEFAULT_MAP_CENTER)
   const [mapInstance, setMapInstance] = useState(null)
 
@@ -79,15 +85,16 @@ function AircraftMap({
   }, [aircraft.length, hasInitialized])
 
   /**
-   * Get the rotation angle for the aircraft icon based on track
-   * Aircraft track is 0° for north, 90° for east, etc.
-   * The marker glyph points up (north) by default, so the track maps directly to rotation
+   * Get the rotation for an aircraft glyph
+   * Track is 0° for north, 90° for east, etc., and the glyph points up (north) by default,
+   * so the angle maps directly to rotation. Callers pass the unwrapped heading rather than
+   * the raw track so the CSS transition turns the short way across north.
    *
-   * @param {number} track - Aircraft track in degrees
+   * @param {number|null} heading - Unwrapped heading in degrees
    * @returns {string} CSS transform string
    */
-  const getAircraftRotation = track => {
-    return track !== null && track !== undefined ? `rotate(${track}deg)` : 'rotate(0deg)'
+  const getAircraftRotation = heading => {
+    return heading !== null && heading !== undefined ? `rotate(${heading}deg)` : 'rotate(0deg)'
   }
 
   /**
@@ -139,36 +146,11 @@ function AircraftMap({
    */
   const formatRssi = rssi => rssi.toFixed(1).replace('-', '\u2212')
 
-  // Fetch detailed track when an aircraft is selected, bounded to the same age
-  // window as the aircraft list so past flights of a regular visitor stay out of it
-  useEffect(() => {
-    if (selectedAircraft) {
-      setLoadingTrack(true)
-      const since = Math.floor(Date.now() / 1000) - maxAgeMinutes * 60
-      fetchAircraftTrack(selectedAircraft.icao24, since)
-        .then(trackData => {
-          setSelectedAircraftTrack(trackData)
-          setLoadingTrack(false)
-          // Notify parent that we're tracking an aircraft
-          if (onTrackingAircraft) {
-            onTrackingAircraft(true)
-          }
-        })
-        .catch(error => {
-          console.error('Error fetching aircraft track:', error)
-          setLoadingTrack(false)
-        })
-    } else {
-      setSelectedAircraftTrack(null)
-      // Notify parent that we're no longer tracking
-      if (onTrackingAircraft) {
-        onTrackingAircraft(false)
-      }
-    }
-  }, [selectedAircraft, onTrackingAircraft, maxAgeMinutes])
-
   // Filter aircraft with valid positions
   const validAircraft = useMemo(() => aircraft.filter(hasPosition), [aircraft])
+
+  // Rotation that only ever turns the short way, so headings crossing north do not spin
+  const headings = useContinuousHeadings(validAircraft)
 
   // The selection is a snapshot from click time; the card reads the live record so it keeps
   // updating, and falls back to the snapshot once the aircraft has aged out of the list
@@ -178,6 +160,45 @@ function AircraftMap({
   )
   const selectedRssi = selected ? aircraftRssi(selected) : null
   const selectedSignal = signalLevel(selectedRssi)
+  const selectedIcao24 = selected?.icao24 ?? null
+  // Changes whenever the live record reports a new position, so the history line is
+  // refetched and keeps ending at the marker instead of freezing at click time
+  const selectedFix = selected ? `${selected.latitude}:${selected.longitude}` : null
+
+  // Fetch the stored history when an aircraft is selected and again on every new fix,
+  // bounded to the same age window as the aircraft list so past flights of a regular
+  // visitor stay out of it. The indicator only shows for the first load of a selection.
+  useEffect(() => {
+    if (!selectedIcao24) {
+      setSelectedAircraftTrack(null)
+      trackLoadedFor.current = null
+      // Notify parent that we're no longer tracking
+      if (onTrackingAircraft) {
+        onTrackingAircraft(false)
+      }
+      return
+    }
+    const request = ++trackRequest.current
+    if (trackLoadedFor.current !== selectedIcao24) setLoadingTrack(true)
+    const since = Math.floor(Date.now() / 1000) - maxAgeMinutes * 60
+    fetchAircraftTrack(selectedIcao24, since)
+      .then(trackData => {
+        if (request !== trackRequest.current) return
+        setSelectedAircraftTrack(trackData)
+        trackLoadedFor.current = selectedIcao24
+        setLoadingTrack(false)
+        // Notify parent that we're tracking an aircraft
+        if (onTrackingAircraft) {
+          onTrackingAircraft(true)
+        }
+      })
+      .catch(error => {
+        if (request !== trackRequest.current) return
+        console.error('Error fetching aircraft track:', error)
+        setLoadingTrack(false)
+      })
+    // selectedFix is not read here; it is the trigger that refreshes the line on each new position
+  }, [selectedIcao24, selectedFix, onTrackingAircraft, maxAgeMinutes])
 
   // Select map style and track colors based on theme
   const isDark = theme === 'dark'
@@ -404,7 +425,7 @@ function AircraftMap({
                   fill ? 'shaded' : '',
                 ].join(' ')}
                 style={{
-                  transform: getAircraftRotation(ac.track),
+                  transform: getAircraftRotation(headings[ac.icao24]),
                   ...(fill && { '--marker-fill': fill }),
                 }}
                 title={[
@@ -538,7 +559,10 @@ function AircraftMap({
 
               <div className="info-group">
                 <div className="info-section-title">Flight</div>
-                <div className="info-row">
+                <div
+                  className="info-row"
+                  title="Direction of travel over the ground from the latest velocity report. The lines on the map are drawn from position reports, so the two can differ slightly."
+                >
                   <span className="label">Track</span>
                   <span className="value">
                     {selected.track !== null && selected.track !== undefined && (
@@ -546,7 +570,9 @@ function AircraftMap({
                         className="heading"
                         viewBox="0 0 12 12"
                         aria-hidden="true"
-                        style={{ transform: `rotate(${selected.track}deg)` }}
+                        style={{
+                          transform: `rotate(${headings[selected.icao24] ?? selected.track}deg)`,
+                        }}
                       >
                         <path d="M6 1.5v9M2.5 5L6 1.5 9.5 5" />
                       </svg>
@@ -581,7 +607,18 @@ function AircraftMap({
               </div>
 
               {selectedAircraftTrack && (
-                <p className="track-footnote">{selectedAircraftTrack.length} track points</p>
+                <p className="track-footnote">
+                  History: {selectedAircraftTrack.length} stored positions from the last{' '}
+                  {maxAgeMinutes} min
+                </p>
+              )}
+              {(selected.registration || selected.typecode || selected.type_description) && (
+                <p className="track-footnote credit">
+                  Registration and type: {AIRCRAFT_DB_CREDIT.text}{' '}
+                  <a href={AIRCRAFT_DB_CREDIT.url} target="_blank" rel="noreferrer">
+                    {AIRCRAFT_DB_CREDIT.license}
+                  </a>
+                </p>
               )}
             </div>
           </>

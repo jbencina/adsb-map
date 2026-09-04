@@ -478,6 +478,17 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Data credit for the enrichment fields; the licence link inherits the muted colour */
+.track-footnote.credit {
+  margin-top: 6px;
+}
+
+.track-footnote.credit a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 @media (max-width: 720px) {
   .aircraft-sidebar {
     top: auto;

@@ -217,11 +217,13 @@ function App() {
                   className={`control-row show-tracks-toggle ${isTrackingAircraft ? 'disabled' : ''}`}
                 >
                   <label htmlFor="show-tracks">
-                    Show tracks
-                    {isTrackingAircraft && (
+                    Show trails
+                    {isTrackingAircraft ? (
                       <span className="disabled-hint">
-                        Unavailable while an aircraft is selected
+                        Hidden while an aircraft&apos;s history is shown
                       </span>
+                    ) : (
+                      <span className="disabled-hint">Positions seen since this page opened</span>
                     )}
                   </label>
                   <input
@@ -231,10 +233,15 @@ function App() {
                     role="switch"
                     checked={showTracks}
                     onChange={e => setShowTracks(e.target.checked)}
-                    aria-label="Toggle aircraft flight path tracks"
+                    aria-label="Toggle recent position trails behind each aircraft"
+                    aria-describedby="show-tracks-desc"
                     aria-checked={showTracks}
                     disabled={isTrackingAircraft}
                   />
+                  <span id="show-tracks-desc" className="sr-only">
+                    Draws a line through the positions received while this page has been open.
+                    Select an aircraft to see its stored history instead.
+                  </span>
                 </div>
 
                 <div className="control-row theme-toggle">

@@ -304,6 +304,17 @@ def test_api_endpoints_exist(test_db, endpoint, expected_status):
     assert response.status_code == expected_status
 
 
+def test_api_index_credits_aircraft_database(client):
+    """ODC-By asks that the credit travel with the data, so /api carries it."""
+    data = client.get("/api").json()
+    credit = data["aircraft_db"]
+    assert credit["source"] == "Mictronics aircraft database"
+    assert credit["license"] == "ODC-By 1.0"
+    assert credit["distributed_by"] == "wiedehopf/tar1090-db"
+    assert credit["source_url"].startswith("https://")
+    assert credit["license_url"].startswith("https://")
+
+
 def test_backend_root_is_api_index(client):
     """The backend has no UI, so / explains the API instead of 404ing."""
     root = client.get("/")

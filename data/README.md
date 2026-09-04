@@ -2,9 +2,25 @@
 
 This directory contains the aircraft database used to enrich ADS-B data with aircraft information.
 
-## Source
+## Source and attribution
 
-The aircraft database (`aircraft.csv`) is sourced from the [tar1090-db](https://github.com/wiedehopf/tar1090-db) project, which maintains the database originally from [Mictronics Aircraft Database](https://www.mictronics.de/aircraft-database/).
+The aircraft database (`aircraft.csv`) is the [Mictronics aircraft database](https://www.mictronics.de/aircraft-database/),
+published under the [Open Data Commons Attribution License (ODC-By) v1.0](https://opendatacommons.org/licenses/by/1-0/)
+and updated regularly upstream.
+
+`adsb download` fetches it from [wiedehopf/tar1090-db](https://github.com/wiedehopf/tar1090-db)
+rather than from Mictronics directly. tar1090-db's `update.sh` pulls the Mictronics export
+(`mic-db.zip`), merges a few community sources, and commits the result as a single gzipped
+CSV on its `csv` branch, which is a convenient, stable download for a CLI. It is a
+distribution mirror only: it carries no licence of its own, so the data stays under ODC-By
+and the credit stays with Mictronics.
+
+Required notice, shown by `adsb download`, at `/api` (`aircraft_db`), and in the map's
+detail card:
+
+> Aircraft registration and type data: Mictronics aircraft database
+> (https://www.mictronics.de/aircraft-database/), Open Data Commons Attribution License v1.0,
+> distributed via wiedehopf/tar1090-db.
 
 ## Database Format
 
@@ -52,4 +68,7 @@ The command will overwrite the existing database with the latest version.
 
 ## License
 
-The aircraft database is maintained by the community and aggregated from various public sources. When using this data, please respect the original data sources and their terms of use.
+ODC-By v1.0. You may use, share and adapt the data, including commercially, as long as you
+attribute the Mictronics aircraft database as above and note any changes you made. The
+database is a separate work from this project's GPL-3.0 code; the two licences do not
+combine.

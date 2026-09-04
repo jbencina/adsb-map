@@ -71,3 +71,12 @@ export const SIGNAL_RANGE_MIN = -36
 export const SIGNAL_RANGE_MAX = -8
 // Weak to strong colour stops, evenly spaced across the range (blended in OKLab)
 export const SIGNAL_COLORS = ['#ff3b30', '#ff9500', '#34c759']
+
+// Credit for the registration / type enrichment shown in the detail card. The data is
+// the Mictronics aircraft database (ODC-By 1.0), fetched by `adsb download` from the
+// tar1090-db mirror; keep this in step with AIRCRAFT_DB_ATTRIBUTION in adsb/aircraft_db.py.
+export const AIRCRAFT_DB_CREDIT = {
+  text: 'Mictronics aircraft database via tar1090-db,',
+  license: 'ODC-By 1.0',
+  url: 'https://opendatacommons.org/licenses/by/1-0/',
+}

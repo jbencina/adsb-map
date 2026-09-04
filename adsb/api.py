@@ -12,6 +12,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.orm import Session, aliased
 
 from adsb import __version__
+from adsb.aircraft_db import AIRCRAFT_DB_ATTRIBUTION
 from adsb.database import Database
 from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
 from adsb.schemas import AircraftStateSchema, SensorSchema, TrackPointSchema
@@ -39,6 +40,9 @@ def api_index() -> dict:
             "/docs": "interactive OpenAPI documentation",
         },
         "map_ui": "run `adsb start frontend --api-url <this server>` and open its port",
+        # Registration / type fields in /api/all come from this database; ODC-By
+        # asks that the credit travel with the data, so clients can find it here.
+        "aircraft_db": AIRCRAFT_DB_ATTRIBUTION,
     }
 
 

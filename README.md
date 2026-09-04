@@ -36,7 +36,7 @@ adsb start frontend                          # add --api-url http://receiver:800
 adsb start all --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 ```
 
-Visit http://localhost:3000/. Aircraft show up as markers; click one for its track.
+Visit http://localhost:3000/. Aircraft show up as markers; click one for its history.
 
 The frontend proxies `/api/*` to the backend, so the browser only ever talks to the
 frontend process: no CORS, no per-machine build, and the Mapbox token stays with the UI.
@@ -46,7 +46,9 @@ See [Running on separate machines](#running-on-separate-machines).
 
 - **pyModeS decoding** — DF4/5/17/18/20/21 message types with CPR position decoding
 - **Aircraft enrichment** — automatic registration / type / description lookup from
-  the [tar1090-db](https://github.com/wiedehopf/tar1090-db) project (566k+ records)
+  the [Mictronics aircraft database](https://www.mictronics.de/aircraft-database/)
+  (566k+ records, ODC-By), fetched via [tar1090-db](https://github.com/wiedehopf/tar1090-db);
+  see [Aircraft database attribution](#aircraft-database-attribution)
 - **REST API** — FastAPI endpoints under `/api/*`, jet1090-compatible
 - **SQLite storage** — aircraft state, position history, reception metadata; nothing is
   purged while running, so the file doubles as a log for offline analysis
@@ -139,6 +141,20 @@ The database runs in SQLite WAL mode, so `adsb.db-wal` and `adsb.db-shm` alongsi
 
 The REST API is self-contained — you can ignore the map and build your own client
 (mobile, monitoring system, dashboard, etc.) against the backend's `/api/*`.
+
+## Trails, history and track on the map
+
+The map shows an aircraft's movement in three ways, from three different sources. They
+agree in spirit but not to the metre, and that is expected:
+
+| What you see | Where it comes from |
+|---|---|
+| **Trail** (the "Show trails" switch) | Positions received by the browser since the page opened, one per poll and only when the aircraft has moved about 100 m. Nothing before the page loaded, and nothing from the database. |
+| **History** (click an aircraft) | Every stored position from `/api/track` within the "max age" window, refetched each time the aircraft reports a new fix. Denser and longer than the trail. Trails are hidden while a history is shown. |
+| **Track** (marker rotation, detail card) | The ground track from the aircraft's latest velocity report, not derived from the positions. A marker can point a few degrees off its own trail because the two are decoded from different messages. |
+
+Marker rotation is animated, and always turns the short way round, so a track crossing
+north (359° to 1°) nudges the marker rather than spinning it.
 
 ## Running on separate machines
 
@@ -316,6 +332,31 @@ One wheel works for any user — no rebuild per token, and the backend never see
 
 See [`data/README.md`](data/README.md) for notes on the aircraft database file.
 
+## Aircraft database attribution
+
+The registration, type code and type description fields come from the
+[Mictronics aircraft database](https://www.mictronics.de/aircraft-database/), published
+under the [Open Data Commons Attribution License (ODC-By) v1.0](https://opendatacommons.org/licenses/by/1-0/).
+`adsb download` fetches it from [wiedehopf/tar1090-db](https://github.com/wiedehopf/tar1090-db),
+which repackages the Mictronics export (with a few community merges) as one gzipped CSV.
+tar1090-db is treated as a distribution mirror only: the data and its licence are
+Mictronics', and the credit stays with them.
+
+ODC-By asks that the attribution travel with the data, so it is surfaced wherever the
+enriched fields appear: the map's detail card, the `/api` discovery document
+(`aircraft_db`), the end of `adsb download`, and `adsb download --help`. If you build
+something on top of `/api/all` and show the registration or type fields, carry the notice
+through:
+
+> Aircraft registration and type data: Mictronics aircraft database
+> (https://www.mictronics.de/aircraft-database/), Open Data Commons Attribution License v1.0,
+> distributed via wiedehopf/tar1090-db.
+
+The Python constants live in `adsb/aircraft_db.py` (`AIRCRAFT_DB_ATTRIBUTION`,
+`AIRCRAFT_DB_NOTICE`) and the UI copy in `frontend/src/constants.js`
+(`AIRCRAFT_DB_CREDIT`). See [`data/README.md`](data/README.md) for the file format.
+
 ## License
 
 GNU General Public License v3.0 or later (GPL-3.0-or-later). See [LICENSE](LICENSE).
+The aircraft database is a separate work under ODC-By; see above.

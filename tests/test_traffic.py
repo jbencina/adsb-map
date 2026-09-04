@@ -9,6 +9,7 @@ from adsb.traffic import (
     TRAFFIC_RETENTION,
     backfill_traffic,
     fill_buckets,
+    grid_bounds,
     hour_of,
     minute_of,
     purge_traffic,
@@ -100,3 +101,10 @@ def test_fill_buckets_zero_fills_and_aligns():
         {"start": 600, "messages": 0, "aircraft": 0},
         {"start": 1200, "messages": 5, "aircraft": 2},
     ]
+
+
+def test_grid_bounds_last_bucket_contains_now():
+    # Mid-interval: the current bucket is partial
+    assert grid_bounds(now=1000, window=1200, interval=600) == (0, 1200)
+    # Exactly on a boundary: the bucket that just began is the current one
+    assert grid_bounds(now=1200, window=1200, interval=600) == (600, 1800)

@@ -26,6 +26,7 @@ from adsb.traffic import (
     aircraft_seen_stmt,
     buckets_stmt,
     fill_buckets,
+    grid_bounds,
     hour_of,
     top_lifetime_stmt,
     top_window_stmt,
@@ -490,8 +491,7 @@ def create_app(
         if window % interval:
             raise HTTPException(status_code=422, detail="interval must divide window evenly")
         now = int(time.time())
-        end = (now // interval + 1) * interval
-        since = end - window
+        since, end = grid_bounds(now, window, interval)
         since_hour = hour_of(since)
 
         rows = session.execute(buckets_stmt(since, interval)).all()

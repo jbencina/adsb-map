@@ -163,6 +163,18 @@ def top_lifetime_stmt(limit: int) -> Select:
     return select(Aircraft).order_by(Aircraft.count.desc()).limit(limit)
 
 
+def grid_bounds(now: int, window: int, interval: int) -> tuple[int, int]:
+    """
+    ``(since, end)`` of the bucket grid covering ``window`` seconds up to ``now``.
+
+    ``end`` is the end of the interval that contains ``now``, so the last bucket
+    is always the current, partial one, even when ``now`` sits exactly on a
+    boundary (then it is the bucket that has just begun).
+    """
+    end = (now // interval + 1) * interval
+    return end - window, end
+
+
 def fill_buckets(rows, since: int, end: int, interval: int) -> list[dict]:
     """Expand sparse ``(start, messages, aircraft)`` rows into a full zero-filled grid."""
     by_start = {int(start): (int(m), int(a)) for start, m, a in rows}

@@ -57,3 +57,17 @@ export const REFRESH_INTERVAL_MIN = 1
 export const REFRESH_INTERVAL_MAX = 60
 export const MAX_AGE_MIN = 1
 export const MAX_AGE_MAX = 60
+
+// Signal strength (RSSI in dBFS, 0 is full scale; readsb's floor is about -48)
+// Fixed bands for the reception indicator, strongest first
+export const SIGNAL_LEVELS = [
+  { min: -15, bars: 4, label: 'Strong' },
+  { min: -22, bars: 3, label: 'Good' },
+  { min: -30, bars: 2, label: 'Fair' },
+  { min: -Infinity, bars: 1, label: 'Weak' },
+]
+// Range the marker shading spans; readings outside it clamp to the ends
+export const SIGNAL_RANGE_MIN = -36
+export const SIGNAL_RANGE_MAX = -8
+// Weak to strong colour stops, evenly spaced across the range (blended in OKLab)
+export const SIGNAL_COLORS = ['#ff3b30', '#ff9500', '#34c759']

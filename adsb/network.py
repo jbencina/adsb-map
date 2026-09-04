@@ -1,9 +1,11 @@
 """Network client for receiving ADS-B messages."""
 
 import logging
+import math
 import threading
 import time
 
+import pyModeS as pms
 from pyModeS.extra.tcpclient import TcpClient
 
 from adsb.database import Database
@@ -12,6 +14,93 @@ from adsb.decoder import ADSBDecoder
 # Separate logger for ADSB data processing (different from API requests)
 adsb_logger = logging.getLogger("adsb.data")
 logger = logging.getLogger(__name__)
+
+BEAST_ESC = 0x1A
+# Beast frame layout: type byte, 6-byte MLAT timestamp, 1-byte signal level, payload.
+BEAST_HEADER_LEN = 8
+BEAST_PAYLOAD_LEN = {0x31: 2, 0x32: 7, 0x33: 14}  # Mode-AC, Mode-S short, Mode-S long
+BEAST_MODE_S_TYPES = (0x32, 0x33)
+
+
+def beast_signal_to_dbfs(level: int) -> float | None:
+    """
+    Convert a Beast signal-level byte (0-255) to dBFS.
+
+    Matches the dump1090/readsb ``rssi`` convention (0 dBFS is full scale).
+    A level of 0 means the source had no signal information, so returns None.
+    """
+    if level <= 0:
+        return None
+    return 20 * math.log10(level / 255)
+
+
+def _split_beast_frames(buffer: list[int]) -> tuple[list[bytearray], list[int]]:
+    """
+    Split a raw Beast byte stream into unescaped frames.
+
+    Returns the complete frames and the unconsumed tail of the buffer (an
+    unterminated frame or a dangling escape byte) to carry into the next read.
+    A frame is complete when it reaches the fixed length for its type, or when
+    the next frame's escape byte arrives.
+    """
+    frames: list[bytearray] = []
+    current: bytearray | None = None
+    remainder_start = len(buffer)
+    i = 0
+    n = len(buffer)
+
+    def push(b: int, end: int) -> None:
+        """Append a decoded byte to the current frame, emitting it if complete."""
+        nonlocal current, remainder_start
+        if current is None:
+            return
+        current.append(b)
+        expected = BEAST_PAYLOAD_LEN.get(current[0])
+        if expected is not None and len(current) == BEAST_HEADER_LEN + expected:
+            frames.append(current)
+            current = None
+            remainder_start = end
+
+    while i < n:
+        b = buffer[i]
+        if b == BEAST_ESC:
+            if i + 1 >= n:
+                # Dangling escape: keep the in-progress frame (if any) and the
+                # escape byte for the next read.
+                if current is None:
+                    remainder_start = i
+                break
+            if buffer[i + 1] == BEAST_ESC:
+                push(BEAST_ESC, i + 2)
+                i += 2
+                continue
+            if current is not None:
+                frames.append(current)
+            current = bytearray()
+            remainder_start = i
+            i += 1
+            continue
+        push(b, i + 1)
+        i += 1
+    return frames, buffer[remainder_start:]
+
+
+def _decode_beast_frame(frame: bytearray) -> tuple[str, float | None] | None:
+    """Return (hex message, rssi dBFS) for a Mode-S frame, or None to skip it."""
+    msgtype = frame[0]
+    if msgtype not in BEAST_MODE_S_TYPES:
+        return None
+    payload_len = BEAST_PAYLOAD_LEN[msgtype]
+    if len(frame) < BEAST_HEADER_LEN + payload_len:
+        return None
+    msg = frame[BEAST_HEADER_LEN : BEAST_HEADER_LEN + payload_len].hex().upper()
+    # Same DF/length sanity check pyModeS applies
+    df = pms.df(msg)
+    if df in [0, 4, 5, 11] and len(msg) != 14:
+        return None
+    if df in [16, 17, 18, 19, 20, 21, 24] and len(msg) != 28:
+        return None
+    return msg, beast_signal_to_dbfs(frame[7])
 
 
 class ADSBNetworkClient(TcpClient):
@@ -99,6 +188,27 @@ class ADSBNetworkClient(TcpClient):
                 "last_message_at": self.last_message_at,
             }
 
+    def read_beast_buffer(self):
+        """
+        Parse Beast frames from ``self.buffer``, keeping the signal level.
+
+        Overrides the pyModeS parser (which discards the signal byte) and is
+        called by the inherited ``run`` loop when ``rawtype`` is ``beast``.
+
+        Returns
+        -------
+        list of tuple
+            (message, timestamp, rssi) tuples; rssi is dBFS or None
+        """
+        frames, self.buffer = _split_beast_frames(self.buffer)
+        ts = time.time()
+        messages = []
+        for frame in frames:
+            decoded = _decode_beast_frame(frame)
+            if decoded is not None:
+                messages.append((decoded[0], ts, decoded[1]))
+        return messages
+
     def handle_messages(self, messages):
         """
         Handle incoming messages from the network stream.
@@ -106,7 +216,7 @@ class ADSBNetworkClient(TcpClient):
         Parameters
         ----------
         messages : list of tuple
-            List of (message, timestamp) tuples
+            List of (message, timestamp) or (message, timestamp, rssi) tuples
         """
         if not messages:
             return
@@ -122,12 +232,13 @@ class ADSBNetworkClient(TcpClient):
                 lon_ref=self.lon_ref,
             )
 
-            for msg, ts in messages:
+            for msg, ts, *extra in messages:
+                rssi = extra[0] if extra else None
                 if len(msg) not in [14, 28]:
                     batch["messages_invalid"] += 1
                     continue
                 try:
-                    result = decoder.process_message(msg, timestamp=ts)
+                    result = decoder.process_message(msg, timestamp=ts, rssi=rssi)
                 except Exception as e:
                     batch["errors"] += 1
                     adsb_logger.debug(f"Error processing message {msg}: {e}")

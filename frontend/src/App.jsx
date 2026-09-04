@@ -32,7 +32,8 @@ function App() {
   const [refreshInterval, setRefreshInterval] = useState(DEFAULT_REFRESH_INTERVAL)
   const [maxAgeMinutes, setMaxAgeMinutes] = useState(DEFAULT_MAX_AGE_MINUTES)
   const [showTracks, setShowTracks] = useState(false)
-  const [showLabels, setShowLabels] = useState(false)
+  const [showLabels, setShowLabels] = useState(true)
+  const [shadeBySignal, setShadeBySignal] = useState(false)
   const [isTrackingAircraft, setIsTrackingAircraft] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const settingsRef = useRef(null)
@@ -198,6 +199,20 @@ function App() {
                   />
                 </div>
 
+                <div className="control-row shade-by-signal-toggle">
+                  <label htmlFor="shade-by-signal">Shade by signal</label>
+                  <input
+                    id="shade-by-signal"
+                    className="switch"
+                    type="checkbox"
+                    role="switch"
+                    checked={shadeBySignal}
+                    onChange={e => setShadeBySignal(e.target.checked)}
+                    aria-label="Toggle shading aircraft markers by signal strength"
+                    aria-checked={shadeBySignal}
+                  />
+                </div>
+
                 <div
                   className={`control-row show-tracks-toggle ${isTrackingAircraft ? 'disabled' : ''}`}
                 >
@@ -265,6 +280,7 @@ function App() {
           tracks={tracks}
           showTracks={showTracks}
           showLabels={showLabels}
+          shadeBySignal={shadeBySignal}
           maxAgeMinutes={maxAgeMinutes}
           onTrackingAircraft={setIsTrackingAircraft}
           theme={appliedTheme}

@@ -38,7 +38,6 @@ instead, and metadata retention stays at its default.
 traffic_minutes            one row per wall-clock minute with traffic
   minute     INTEGER PK    epoch seconds floored to 60
   messages   INTEGER NN    messages attributed to an aircraft in that minute
-  positions  INTEGER NN    of which carried a decoded position
   aircraft   INTEGER NN    distinct icao24 heard in that minute
 
 aircraft_hourly            one row per (aircraft, hour) with traffic
@@ -59,17 +58,16 @@ Retention for both tables is a constant, 7 days (`TRAFFIC_RETENTION`).
 `Aircraft` row and the timestamp, and whether a position was decoded. It
 accumulates for the batch:
 
-- `per_minute[minute] -> (messages, positions, set(icao24))`
+- `per_minute[minute] -> (messages, set(icao24))`
 - `per_aircraft_hour[(aircraft_id, hour)] -> messages`
 
 and hands them to `traffic.record_batch(session, ...)`, which issues one SQLite
 upsert per row inside the batch's existing session/transaction:
 
 ```
-INSERT INTO traffic_minutes VALUES (:minute, :m, :p, :a)
+INSERT INTO traffic_minutes VALUES (:minute, :m, :a)
 ON CONFLICT(minute) DO UPDATE SET
   messages = messages + excluded.messages,
-  positions = positions + excluded.positions,
   aircraft = max(aircraft, excluded.aircraft)
 ```
 
@@ -77,16 +75,16 @@ For `aircraft`, the client keeps the current minute's `set[str]` of icao24 in
 memory across batches (`self._minute_aircraft`, reset when the minute changes)
 and passes its size, so within one process the value is exact. Across a restart
 `max()` keeps the larger of the two partial counts, an acceptable approximation.
-Messages and positions are exact deltas either way. `aircraft_hourly` uses the
+Messages are exact deltas either way. `aircraft_hourly` uses the
 same upsert shape with `messages = messages + excluded.messages`.
 
 `traffic.purge(session, now)` deletes rows older than 7 days from both tables and
 runs in the existing once-a-minute housekeeping block alongside the metadata
 purge.
 
-**Backfill:** on `create_tables()`, if `traffic_minutes` is empty and
-`aircraft_metadata` is not, seed `traffic_minutes` and `aircraft_hourly` from the
-retained hour of metadata (and `aircraft_positions` for the position count) with
+**Backfill:** at backend start (`cli._build_backend`, after `create_tables()`),
+if `traffic_minutes` is empty and `aircraft_metadata` is not, seed
+`traffic_minutes` and `aircraft_hourly` from the retained hour of metadata with
 two `INSERT ... SELECT ... GROUP BY`. One-off, ~0.5 s, so an upgraded install
 shows its last hour immediately instead of an empty chart.
 
@@ -101,7 +99,7 @@ Response (`adsb/schemas.py: StatsSchema`):
 ```json
 {
   "now": 1788556190, "window": 86400, "interval": 900, "aircraft_seen": 412,
-  "buckets": [{"start": 1788469800, "messages": 12345, "positions": 1200, "aircraft": 95}],
+  "buckets": [{"start": 1788469800, "messages": 12345, "aircraft": 95}],
   "top_window":   [{"icao24": "a1b2c3", "callsign": "UAL123", "registration": "N12345",
                     "typecode": "B738", "messages": 4321, "lastseen": 1788556100}],
   "top_lifetime": [ ...same shape... ]
@@ -110,9 +108,8 @@ Response (`adsb/schemas.py: StatsSchema`):
 
 - `buckets` is the full grid, oldest first, aligned so the last bucket ends at
   `now` rounded up to the interval, with zero rows filled in server-side.
-  Query: `SELECT (minute/:iv)*:iv AS b, SUM(messages), SUM(positions),
-  MAX(aircraft) FROM traffic_minutes WHERE minute >= :since GROUP BY b` (PK range
-  scan).
+  Query: `SELECT (minute/:iv)*:iv AS b, SUM(messages), MAX(aircraft) FROM
+  traffic_minutes WHERE minute >= :since GROUP BY b` (PK range scan).
 - `top_window`: `SELECT aircraft_id, SUM(messages) FROM aircraft_hourly WHERE hour
   >= :since_hour GROUP BY aircraft_id ORDER BY 2 DESC LIMIT :n`, joined to
   `aircraft` for identity fields. `since_hour` is the window start floored to
@@ -171,21 +168,20 @@ and the CHANGELOG.
   1. Header row: title "History", subtitle "Last 24 hours · updated 12:04",
      interval segmented control (reuses `.segmented`/`.segment`), X button
      (reuses `.close-button`).
-  2. Summary strip of four `.stat` tiles: messages (sum of buckets),
-     positions (sum), peak aircraft in one minute (max over buckets), and
-     aircraft heard in the window (`aircraft_seen`, a field the backend adds
-     from `COUNT(DISTINCT aircraft_id)` over `aircraft_hourly` in the window).
+  2. Summary strip of three `.stat` tiles: messages (sum of buckets), peak
+     aircraft in one minute (max over buckets), and aircraft heard in the
+     window (`aircraft_seen`, from `COUNT(DISTINCT aircraft_id)` over
+     `aircraft_hourly` in the window).
   3. Two chart cards, "Message volume" and "Aircraft tracked", each a
      `BarChart`.
   4. Two table cards side by side, "Top aircraft · last 24 hours" and
      "Top aircraft · all time"; they stack under 900 px.
-- `components/BarChart.jsx`: hand-rolled SVG, no chart dependency (none is
-  in the repo). Measures its container with `ResizeObserver`, draws bars with
-  `rx` rounded tops in `var(--accent)`, horizontal gridlines at `niceMax`
-  steps with right-aligned tabular labels, x labels from `timeTicks`. Hover or
-  focus on a bar shows a small tooltip with the bucket range and value;
-  bars carry `aria-label`s. Empty data renders the axes with a muted
-  "No traffic recorded yet" message.
+- `components/BarChart.jsx`: plain HTML/CSS, no chart dependency (none is
+  in the repo) and no measuring. A flex row of bar `div`s whose heights are
+  percentages of `niceMax`, over absolutely positioned gridlines with
+  right-aligned tabular labels; x labels from `timeTicks`. Each bar has a
+  `title` (bucket range and value) and an `aria-label`; hovering brightens
+  it. Empty data renders the frame with a muted "No traffic recorded yet".
 - `components/TopAircraftTable.jsx`: a real `<table>` with three columns.
   Aircraft cell: callsign (or registration, or icao24) in 500 weight with a
   muted second line of registration · type. Messages right-aligned tabular.

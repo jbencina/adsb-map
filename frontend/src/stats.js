@@ -10,11 +10,11 @@ export const INTERVAL_OPTIONS = [
 
 export const HISTORY_WINDOW = 86400 // seconds shown in the history view
 
-/** `1,234` below ten thousand, then `12.3k` / `1.23M`. */
+/** `1,234` below ten thousand, then always one decimal: `12.3k`, `20.0k`, `1.2M`. */
 export function formatCount(n) {
   if (n < 10000) return n.toLocaleString('en-US')
-  if (n < 1e6) return `${(n / 1e3).toFixed(1).replace(/\.0$/, '')}k`
-  return `${(n / 1e6).toFixed(2).replace(/\.?0+$/, '')}M`
+  if (n < 1e6) return `${(n / 1e3).toFixed(1)}k`
+  return `${(n / 1e6).toFixed(1)}M`
 }
 
 // Axis maxima are 1, 2, 3 or 5 × 10^k, each with a step count that keeps the

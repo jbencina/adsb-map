@@ -14,8 +14,9 @@ describe('formatCount', () => {
     expect(formatCount(0)).toBe('0')
     expect(formatCount(1234)).toBe('1,234')
     expect(formatCount(12345)).toBe('12.3k')
-    expect(formatCount(20000)).toBe('20k')
-    expect(formatCount(1234567)).toBe('1.23M')
+    expect(formatCount(20000)).toBe('20.0k')
+    expect(formatCount(1234567)).toBe('1.2M')
+    expect(formatCount(2000000)).toBe('2.0M')
   })
 })
 

@@ -46,3 +46,17 @@ export async function fetchAircraftTracks(sinceSeconds) {
   if (fleet) return fleet.tracks(sinceSeconds)
   return getJson(`/api/tracks?since=${encodeURIComponent(sinceSeconds)}`)
 }
+
+/**
+ * Fetches the traffic history behind the history view
+ *
+ * @param {{window: number, interval: number, limit: number}} params - Seconds of
+ *   history, bucket size in seconds (must divide the window), rows per top list
+ * @returns {Promise<Object>} Buckets and top-aircraft lists, shaped like /api/stats
+ * @throws {Error} If the API request fails
+ */
+export async function fetchStats({ window, interval, limit }) {
+  if (fleet) return fleet.stats({ window, interval, limit })
+  const query = new URLSearchParams({ window, interval, limit })
+  return getJson(`/api/stats?${query}`)
+}

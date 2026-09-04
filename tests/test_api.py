@@ -6,7 +6,14 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from adsb.api import MAX_METADATA_RECORDS, create_app, get_db, latest_metadata_stmt, track_stmt
+from adsb.api import (
+    MAX_METADATA_RECORDS,
+    aircraft_since_stmt,
+    create_app,
+    get_db,
+    latest_metadata_stmt,
+    track_stmt,
+)
 from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
 from tests.helpers import add_metadata, query_plan, statements_containing
 
@@ -383,14 +390,16 @@ def test_all_uses_bounded_number_of_queries(test_db, test_session, client):
 @pytest.mark.parametrize(
     ("stmt", "index"),
     [
+        # An ORDER BY id on this one once made SQLite scan every aircraft ever seen.
+        (aircraft_since_stmt(cutoff=0), "ix_aircraft_lastseen"),
         (latest_metadata_stmt(cutoff=0), "ix_aircraft_metadata_aircraft_id_system_timestamp"),
         (track_stmt(aircraft_id=1, since=0), "ix_aircraft_positions_aircraft_id_timestamp"),
     ],
-    ids=["latest_metadata", "track"],
+    ids=["aircraft_since", "latest_metadata", "track"],
 )
 def test_hot_statements_seek_their_index(test_db, stmt, index):
-    """The statements behind /api/all and /api/track must seek, never scan, their table."""
+    """The statements behind /api/all and /api/track must seek, never scan, a table."""
     plan = query_plan(test_db.engine, stmt)
 
     assert any(index in step for step in plan), plan
-    assert not any(step.startswith("SCAN aircraft_") for step in plan), plan
+    assert not any(step.startswith("SCAN ") for step in plan), plan

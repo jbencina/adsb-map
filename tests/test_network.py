@@ -370,14 +370,18 @@ def test_handle_messages_purges_once_per_cleanup_interval(test_db):
 
 
 def test_handle_messages_survives_purge_failure(test_db):
-    """A failing purge must not take the decoder thread (and the feed) down with it."""
-    client = make_client(test_db, metadata_retention=3600, cleanup_interval=0)
+    """A failing purge must not take the feed down, and must wait for the next interval."""
+    client = make_client(test_db, metadata_retention=3600, cleanup_interval=3600)
+    attempts = []
 
     def boom(self, retention, now=None):
+        attempts.append(now)
         raise RuntimeError("database is locked")
 
     with patch.object(ADSBDecoder, "purge_old_metadata", boom):
         client.handle_messages([(LONG_MSG, time.time(), -12.5)])
+        client.handle_messages([(LONG_MSG, time.time(), -12.5)])
 
+    assert len(attempts) == 1  # a failure does not turn into a retry on every batch
     with test_db.get_session() as session:
-        assert session.query(Aircraft).filter_by(icao24="4840d6").first() is not None
+        assert session.query(Aircraft).filter_by(icao24="4840d6").count() == 1

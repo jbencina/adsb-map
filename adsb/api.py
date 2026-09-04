@@ -75,6 +75,16 @@ def get_session():
         yield session
 
 
+def aircraft_since_stmt(cutoff: int) -> Select:
+    """
+    Aircraft last seen at or after ``cutoff``, via the ``lastseen`` index.
+
+    Deliberately unordered: an ``ORDER BY id`` makes SQLite drop the index and
+    scan every aircraft ever seen, and callers attach data by id anyway.
+    """
+    return select(Aircraft).where(Aircraft.lastseen >= cutoff)
+
+
 def latest_metadata_stmt(cutoff: int) -> Select:
     """
     Newest ``MAX_METADATA_RECORDS`` metadata rows for every aircraft seen since ``cutoff``.
@@ -217,8 +227,7 @@ def create_app(
             List of aircraft state vectors
         """
         cutoff = seen_since(max_age)
-        # No ORDER BY here: sorting by id makes SQLite drop the lastseen index.
-        aircraft_list = session.query(Aircraft).filter(Aircraft.lastseen >= cutoff).all()
+        aircraft_list = session.execute(aircraft_since_stmt(cutoff)).scalars().all()
 
         # One statement for everyone's newest metadata, not one per aircraft.
         by_aircraft: dict[int, list[AircraftMetadata]] = {}

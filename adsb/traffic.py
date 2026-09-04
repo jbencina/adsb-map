@@ -9,11 +9,11 @@ per hour. The network client upserts deltas for every batch it decodes.
 
 import time
 
-from sqlalchemy import delete, func
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from adsb.models import AircraftHourly, TrafficMinute
+from adsb.models import AircraftHourly, AircraftMetadata, TrafficMinute
 
 TRAFFIC_RETENTION = 7 * 86400  # seconds of aggregate history kept
 
@@ -88,3 +88,31 @@ def purge_traffic(
         )
         removed += result.rowcount
     return removed
+
+
+def backfill_traffic(session: Session) -> bool:
+    """
+    Seed empty aggregates from whatever reception metadata is still retained.
+
+    Runs once at backend start so an upgraded install shows its last hour of
+    history straight away instead of an empty chart. Returns True if it wrote.
+    """
+    if session.execute(select(TrafficMinute.minute).limit(1)).first() is not None:
+        return False
+    if session.execute(select(func.count()).select_from(AircraftMetadata)).scalar() == 0:
+        return False
+    session.execute(
+        text(
+            "INSERT INTO traffic_minutes (minute, messages, aircraft) "
+            "SELECT (CAST(system_timestamp AS INTEGER) / 60) * 60, COUNT(*), "
+            "COUNT(DISTINCT aircraft_id) FROM aircraft_metadata GROUP BY 1"
+        )
+    )
+    session.execute(
+        text(
+            "INSERT INTO aircraft_hourly (aircraft_id, hour, messages) "
+            "SELECT aircraft_id, (CAST(system_timestamp AS INTEGER) / 3600) * 3600, COUNT(*) "
+            "FROM aircraft_metadata GROUP BY 1, 2"
+        )
+    )
+    return True

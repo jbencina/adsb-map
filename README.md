@@ -125,6 +125,7 @@ paths (proxied) plus the map itself.
 | `GET /api/track?icao24={icao24}&since={ts}` | Trajectory for one aircraft |
 | `GET /api/tracks?max_age={seconds}&since={ts}` | Trajectories of every aircraft in the window, keyed by ICAO24; `since` overrides the window for incremental polling |
 | `GET /api/sensors` | Receiver/sensor serials heard within `--metadata-retention` |
+| `GET /api/stats?window={seconds}&interval={seconds}&limit={n}` | Traffic history: messages and peak aircraft per interval (default 24 h in 15-min buckets), plus top aircraft by messages in the window and over their lifetime |
 | `GET /api` | API discovery (welcome JSON) |
 | `GET /docs` | Interactive OpenAPI docs (backend) |
 | `GET /` | Backend: same discovery JSON as `/api`. Frontend: the map |
@@ -304,6 +305,7 @@ unzip -l dist/adsb_map-*.whl | grep adsb/static/
 | `schemas.py` | Pydantic response models |
 | `aircraft_db.py` | Lazy-loaded singleton CSV (566k+ rows) → registration/type lookup; owns `aircraft_db_path()`, the one location both `download` and the loader use |
 | `status.py` | `StatusReporter` — daemon thread printing the periodic `[STATUS]` line |
+| `traffic.py` | Per-minute / per-aircraft-hour traffic aggregates: writer, purge, backfill, and the `/api/stats` statements |
 | `cli.py` | Click CLI: `start backend`, `start frontend`, `download`, `init-db`, `decode`, `cleanup`, `db-size` |
 | `static/` | Built frontend assets served by `ui.py` (populated by `just build` or CI; gitignored) |
 
@@ -331,7 +333,9 @@ One wheel works for any user — no rebuild per token, and the backend never see
 |---|---|
 | `aircraft` | Current state per aircraft (position, velocity, ID, telemetry, registration/type) |
 | `aircraft_positions` | Historical positions for trajectory rendering |
-| `aircraft_metadata` | Reception metadata (timing, RSSI, receiver serial) |
+| `aircraft_metadata` | Reception metadata (timing, RSSI, receiver serial); rolling `--metadata-retention` window |
+| `traffic_minutes` | Messages and distinct aircraft per minute, for the history view; rolling 7 days |
+| `aircraft_hourly` | Messages per aircraft per hour, for the history view's 24-hour top list; rolling 7 days |
 
 See [`data/README.md`](data/README.md) for notes on the aircraft database file.
 

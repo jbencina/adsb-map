@@ -10,6 +10,7 @@ from pyModeS.extra.tcpclient import TcpClient
 
 from adsb.database import Database
 from adsb.decoder import DEFAULT_METADATA_RETENTION, METADATA_PURGE_INTERVAL, ADSBDecoder
+from adsb.traffic import hour_of, minute_of, purge_traffic, record_batch
 
 # Separate logger for ADSB data processing (different from API requests)
 adsb_logger = logging.getLogger("adsb.data")
@@ -166,6 +167,11 @@ class ADSBNetworkClient(TcpClient):
         self.total_positions = 0
         self.total_aircraft: set[str] = set()
 
+        # Distinct aircraft heard in the current minute, kept across batches so the
+        # per-minute aggregate is exact within this process (see traffic.record_batch).
+        self._minute_start = 0
+        self._minute_aircraft: set[str] = set()
+
     @staticmethod
     def _empty_interval() -> dict:
         return {
@@ -235,6 +241,8 @@ class ADSBNetworkClient(TcpClient):
 
         batch = self._empty_interval()
         batch["messages_received"] = len(messages)
+        minutes: dict[int, list] = {}  # minute -> [messages, set(icao24)]
+        hourly: dict[tuple[int, int], int] = {}
 
         with self.database.get_session() as session:
             decoder = ADSBDecoder(
@@ -260,6 +268,21 @@ class ADSBNetworkClient(TcpClient):
                     batch["aircraft_seen"].add(result.icao24)
                     if result.latitude is not None and result.longitude is not None:
                         batch["positions_decoded"] += 1
+                    bucket = minutes.setdefault(minute_of(ts), [0, set()])
+                    bucket[0] += 1
+                    bucket[1].add(result.icao24)
+                    key = (result.id, hour_of(ts))
+                    hourly[key] = hourly.get(key, 0) + 1
+
+            # Fold this batch into the traffic aggregates behind the history view.
+            minute_rows: dict[int, tuple[int, int]] = {}
+            for minute in sorted(minutes):
+                count, seen = minutes[minute]
+                if minute != self._minute_start:
+                    self._minute_start, self._minute_aircraft = minute, set()
+                self._minute_aircraft |= seen
+                minute_rows[minute] = (count, len(self._minute_aircraft))
+            record_batch(session, minute_rows, hourly)
 
             # Trim reception metadata now and then; the decoder is a no-op at retention 0.
             now = time.time()
@@ -268,6 +291,8 @@ class ADSBNetworkClient(TcpClient):
                 try:
                     removed = decoder.purge_old_metadata(self.metadata_retention, now=now)
                     adsb_logger.debug(f"Purged {removed} old metadata rows")
+                    removed_traffic = purge_traffic(session, now=now)
+                    adsb_logger.debug(f"Purged {removed_traffic} old traffic rows")
                 except Exception as e:  # housekeeping must never take the feed down
                     adsb_logger.warning(f"Metadata purge failed, will retry: {e}")
 

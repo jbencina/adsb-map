@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source table is trimmed to that window.
 
 ### Added
+- **History view.** A clock icon next to the gear opens a full-screen overlay over
+  the map with the last 24 hours of traffic: message volume and peak aircraft per
+  interval (5 min / 15 min / 1 h), and top-10 aircraft by messages in the window
+  and over their lifetime. The map keeps running underneath; Escape or the X
+  returns to it. Backed by a new `GET /api/stats` and two small aggregate tables
+  (`traffic_minutes`, `aircraft_hourly`) the decoder maintains per batch and trims
+  to seven days, so the charts never touch the per-message rows. Existing
+  databases are seeded from their retained hour of metadata on the next start.
 - Attribution for the aircraft database (#17). The registration / type data is the
   Mictronics aircraft database under ODC-By 1.0, fetched via the tar1090-db mirror. The
   credit now appears in the map's detail card, in the `/api` discovery document

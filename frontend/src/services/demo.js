@@ -166,4 +166,44 @@ export class DemoFleet {
     }
     return out
   }
+
+  /**
+   * A day of plausible traffic, shaped like /api/stats: quiet overnight, busy
+   * in the afternoon, with per-bucket noise seeded by the bucket start so the
+   * picture is stable across refreshes.
+   */
+  stats({ window = 86400, interval = 900, limit = 10 } = {}) {
+    const now = Math.floor(this.lastTick / 1000)
+    const end = (Math.floor(now / interval) + 1) * interval
+    const size = this.entries.length
+    const buckets = []
+    for (let start = end - window; start < end; start += interval) {
+      const rand = mulberry32(start)
+      const date = new Date(start * 1000)
+      const hour = date.getHours() + date.getMinutes() / 60
+      const diurnal = 0.35 + 0.65 * (0.5 - 0.5 * Math.cos((2 * Math.PI * (hour - 4)) / 24))
+      const aircraft = clamp(Math.round(size * diurnal + between(rand, -2, 2)), 1, size)
+      const perMinute = aircraft * between(rand, 55, 75)
+      const minutes = clamp(now - start, 0, interval) / 60
+      buckets.push({ start, messages: Math.round(perMinute * minutes), aircraft })
+    }
+    const ranked = [...this.entries].sort((a, b) => b.ac.count - a.ac.count).slice(0, limit)
+    const row = (e, messages) => ({
+      icao24: e.ac.icao24,
+      callsign: e.ac.callsign,
+      registration: e.ac.registration,
+      typecode: e.ac.typecode,
+      messages,
+      lastseen: e.ac.lastseen,
+    })
+    return {
+      now,
+      window,
+      interval,
+      aircraft_seen: size,
+      buckets,
+      top_window: ranked.map((e, i) => row(e, e.ac.count * (40 - i * 2))),
+      top_lifetime: ranked.map((e, i) => row(e, e.ac.count * (400 - i * 25))),
+    }
+  }
 }

@@ -42,7 +42,8 @@ class Aircraft(Base):
     roll: Mapped[float | None] = mapped_column(Float, nullable=True)
     heading: Mapped[float | None] = mapped_column(Float, nullable=True)
     nacp: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # The history view's lifetime top list orders by this.
+    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False, index=True)
 
     # Relationships
     positions: Mapped[list["AircraftPosition"]] = relationship(
@@ -103,3 +104,34 @@ class AircraftMetadata(Base):
 
     # Relationships
     aircraft: Mapped["Aircraft"] = relationship("Aircraft", back_populates="reception_metadata")
+
+
+class TrafficMinute(Base):
+    """
+    Messages and distinct aircraft heard per wall-clock minute.
+
+    Maintained by the network client from each decoded batch, so the history
+    view can chart a day of traffic without keeping a day of per-message rows
+    (``aircraft_metadata`` is trimmed to an hour). ``aircraft`` is the number
+    of distinct icao24 heard in that minute.
+    """
+
+    __tablename__ = "traffic_minutes"
+
+    minute: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    messages: Mapped[int] = mapped_column(Integer, nullable=False)
+    aircraft: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class AircraftHourly(Base):
+    """Messages per aircraft per wall-clock hour, for the 24-hour top list."""
+
+    __tablename__ = "aircraft_hourly"
+    # The stats endpoint sums a window of hours across all aircraft.
+    __table_args__ = (Index("ix_aircraft_hourly_hour", "hour"),)
+
+    aircraft_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("aircraft.id"), primary_key=True, autoincrement=False
+    )
+    hour: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    messages: Mapped[int] = mapped_column(Integer, nullable=False)

@@ -22,6 +22,7 @@ from adsb.database import Database
 from adsb.decoder import DEFAULT_METADATA_RETENTION, ADSBDecoder
 from adsb.network import start_network_client
 from adsb.status import StatusReporter
+from adsb.traffic import backfill_traffic
 from adsb.ui import DEFAULT_API_URL, create_ui_app
 
 DATEFMT = "%Y-%m-%d %H:%M:%S"
@@ -233,6 +234,9 @@ def _build_backend(
     database = Database(db_path)
     database.create_tables()
     click.echo(f"Database initialized: {db_path}")
+    with database.get_session() as session:
+        if backfill_traffic(session):
+            click.echo("Traffic history seeded from retained reception metadata")
 
     # If network source is specified, start background decoder
     network_client = None
@@ -589,6 +593,9 @@ def init_db(db_path: str):
     database = Database(db_path)
     database.create_tables()
     click.echo(f"Database initialized: {db_path}")
+    with database.get_session() as session:
+        if backfill_traffic(session):
+            click.echo("Traffic history seeded from retained reception metadata")
 
 
 @main.command()

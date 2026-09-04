@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { hasPosition } from './aircraft'
+import { cleanCallsign, hasPosition } from './aircraft'
 
 describe('hasPosition', () => {
   test('true when both coordinates are numbers', () => {
@@ -14,5 +14,15 @@ describe('hasPosition', () => {
     expect(hasPosition({ latitude: null, longitude: null })).toBe(false)
     expect(hasPosition({})).toBe(false)
     expect(hasPosition({ latitude: 40.7 })).toBe(false)
+  })
+})
+
+describe('cleanCallsign', () => {
+  test('drops the padding underscores and handles missing values', () => {
+    expect(cleanCallsign('N7894G__')).toBe('N7894G')
+    expect(cleanCallsign('SKW5702_')).toBe('SKW5702')
+    expect(cleanCallsign('UAL123')).toBe('UAL123')
+    expect(cleanCallsign(null)).toBe('')
+    expect(cleanCallsign('____')).toBe('')
   })
 })

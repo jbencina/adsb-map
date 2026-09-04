@@ -1,6 +1,6 @@
 """Database models for aircraft data storage."""
 
-from sqlalchemy import Float, ForeignKey, Integer, String
+from sqlalchemy import Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -23,7 +23,7 @@ class Aircraft(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     icao24: Mapped[str] = mapped_column(String(6), unique=True, index=True, nullable=False)
     firstseen: Mapped[int] = mapped_column(Integer, nullable=False)
-    lastseen: Mapped[int] = mapped_column(Integer, nullable=False)
+    lastseen: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     callsign: Mapped[str | None] = mapped_column(String(8), nullable=True)
     registration: Mapped[str | None] = mapped_column(String(10), nullable=True)
     typecode: Mapped[str | None] = mapped_column(String(4), nullable=True)
@@ -82,6 +82,13 @@ class AircraftMetadata(Base):
     """
 
     __tablename__ = "aircraft_metadata"
+    # /api/all reads the newest few rows per aircraft: seek on aircraft_id, walk the
+    # timestamp tail. Without this every poll scanned and sorted the whole table.
+    __table_args__ = (
+        Index(
+            "ix_aircraft_metadata_aircraft_id_system_timestamp", "aircraft_id", "system_timestamp"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     aircraft_id: Mapped[int] = mapped_column(Integer, ForeignKey("aircraft.id"), nullable=False)

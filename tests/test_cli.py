@@ -447,3 +447,45 @@ def test_backend_log_config_drops_invalid_http_noise(tmp_path, monkeypatch, no_u
     assert not handler.filter(noise)
     assert handler.filter(real)
     assert isinstance(handler.filters[0], DropNoiseFilter)
+
+
+def test_backend_passes_metadata_retention_to_network_client(tmp_path, monkeypatch, no_uvicorn):
+    """--metadata-retention reaches the decoder thread that does the purging."""
+    import adsb.cli
+
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        adsb.cli,
+        "start_network_client",
+        lambda **kw: calls.append(kw) or SimpleNamespace(stop=lambda: None),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "start",
+            "backend",
+            "--db-path",
+            str(tmp_path / "t.db"),
+            "--source",
+            "net",
+            "--connect",
+            "localhost",
+            "30005",
+            "beast",
+            "--metadata-retention",
+            "120",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["metadata_retention"] == 120
+    assert "120" in result.output
+
+
+@pytest.mark.parametrize("command", ["backend", "all"])
+def test_feed_options_help_lists_metadata_retention(command):
+    result = CliRunner().invoke(main, ["start", command, "--help"])
+    assert "--metadata-retention" in result.output
+    assert "3600" in result.output

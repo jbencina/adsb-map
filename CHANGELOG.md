@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`/api/all` took seconds after an overnight run.** With nothing ever purged, the
+  endpoint was running one unindexed `ORDER BY ... LIMIT 4` query per aircraft against
+  `aircraft_metadata`, each a full scan and sort of every reception row ever stored
+  (7 s per poll on a 2M-row database, polled every second). The newest rows for all
+  aircraft now come from a single statement that seeks a new
+  `(aircraft_id, system_timestamp)` index, and `aircraft.lastseen` (the `max_age` filter)
+  is indexed too. Existing databases get the indexes on the next start.
+
+### Added
+- `--metadata-retention SECONDS` on `start backend` / `start all` (default 3600, 0 to
+  disable): the decoder deletes reception metadata older than this once a minute.
+  Aircraft and positions are still never deleted; metadata is only ever shown for live
+  aircraft, so keeping more just grows the file.
+- SQLite runs in WAL mode with `synchronous=NORMAL`, so API reads no longer wait on the
+  decoder's commits. Expect `adsb.db-wal` and `adsb.db-shm` next to the database.
+
 ### Changed
 - **The backend no longer purges stale aircraft.** Previously anything not seen within
   `--stale-timeout` was deleted every 30 seconds, taking its positions and reception

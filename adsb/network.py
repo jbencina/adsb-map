@@ -124,9 +124,15 @@ class ADSBNetworkClient(TcpClient):
         (see :class:`ADSBDecoder`), by default 60
     lat_ref, lon_ref : float, optional
         Receiver position for CPR decoding
+    metadata_retention : int, optional
+        Delete reception metadata older than this many seconds; 0 keeps it all.
+        By default 3600
+    cleanup_interval : int, optional
+        Seconds between metadata purges, by default 60
 
-    Decoded data is only ever added: aircraft that stop transmitting stay in the
-    database for offline analysis, and the API hides them by age instead.
+    Aircraft and their positions are only ever added: aircraft that stop
+    transmitting stay in the database for offline analysis, and the API hides
+    them by age instead. Reception metadata is trimmed to ``metadata_retention``.
     """
 
     def __init__(
@@ -138,6 +144,8 @@ class ADSBNetworkClient(TcpClient):
         stale_timeout: int = 60,
         lat_ref: float | None = None,
         lon_ref: float | None = None,
+        metadata_retention: int = 3600,
+        cleanup_interval: int = 60,
     ):
         """Initialize network client."""
         super().__init__(host, port, rawtype)
@@ -145,6 +153,9 @@ class ADSBNetworkClient(TcpClient):
         self.stale_timeout = stale_timeout
         self.lat_ref = lat_ref
         self.lon_ref = lon_ref
+        self.metadata_retention = metadata_retention
+        self.cleanup_interval = cleanup_interval
+        self.last_cleanup = 0.0
         self._stop_event = threading.Event()
 
         # Written by the client thread, read by the status reporter thread.
@@ -250,6 +261,16 @@ class ADSBNetworkClient(TcpClient):
                     if result.latitude is not None and result.longitude is not None:
                         batch["positions_decoded"] += 1
 
+            # Trim reception metadata now and then; it is only shown for live aircraft.
+            now = time.time()
+            if self.metadata_retention > 0 and now - self.last_cleanup >= self.cleanup_interval:
+                removed = decoder.purge_old_metadata(self.metadata_retention, now=now)
+                if removed:
+                    adsb_logger.debug(
+                        f"Purged {removed} metadata rows older than {self.metadata_retention}s"
+                    )
+                self.last_cleanup = now
+
             # One lock per batch rather than per message; the reporter only
             # needs a consistent view, not real-time updates.
             with self._lock:
@@ -280,6 +301,7 @@ def start_network_client(
     stale_timeout: int = 60,
     lat_ref: float | None = None,
     lon_ref: float | None = None,
+    metadata_retention: int = 3600,
 ) -> ADSBNetworkClient:
     """
     Start network client in a background thread.
@@ -298,6 +320,8 @@ def start_network_client(
         Seconds of silence after which an aircraft heard again is a new contact
     lat_ref, lon_ref : float, optional
         Receiver position for CPR decoding
+    metadata_retention : int, optional
+        Delete reception metadata older than this many seconds; 0 keeps it all
 
     Returns
     -------
@@ -312,6 +336,7 @@ def start_network_client(
         stale_timeout=stale_timeout,
         lat_ref=lat_ref,
         lon_ref=lon_ref,
+        metadata_retention=metadata_retention,
     )
 
     # Run client in background thread as daemon

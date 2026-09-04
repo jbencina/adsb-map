@@ -123,10 +123,15 @@ paths (proxied) plus the map itself.
 | `GET /api/sensors` | Receiver/sensor info (serials) |
 | `GET /api` | API discovery (welcome JSON) |
 
-The backend never deletes what it has decoded. `--stale-timeout` only sets the default
-`max_age` window, so the map's "max age" slider can reach back through everything the
-database holds, and the SQLite file stays complete for offline analysis. Run `adsb cleanup`
-yourself if you ever want to reclaim space.
+The backend never deletes aircraft or their positions. `--stale-timeout` only sets the
+default `max_age` window, so the map's "max age" slider can reach back through everything
+the database holds, and the SQLite file stays complete for offline analysis. Run
+`adsb cleanup` yourself if you ever want to reclaim space. Per-message reception metadata
+(RSSI, receiver serial) is the exception: it is only shown for live aircraft, so the
+backend trims it to the last hour (`--metadata-retention SECONDS`, 0 to keep it all).
+
+The database runs in SQLite WAL mode, so `adsb.db-wal` and `adsb.db-shm` alongside
+`adsb.db` are normal while the backend is running.
 | `GET /docs` | Interactive OpenAPI docs (backend) |
 | `GET /` | Backend: same discovery JSON as `/api`. Frontend: the map |
 | `GET /config.js` | Runtime config shim exposing `MAPBOX_TOKEN` to the SPA (frontend only) |

@@ -5,10 +5,12 @@ that proxies to this one, so nothing here serves HTML, static files or CORS.
 """
 
 import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Query
-from sqlalchemy.orm import Session
+from sqlalchemy import Select, select
+from sqlalchemy.orm import Session, aliased
 
 from adsb import __version__
 from adsb.database import Database
@@ -72,6 +74,34 @@ def get_session():
     database = get_db()
     with database.get_session() as session:
         yield session
+
+
+def latest_metadata_stmt(cutoff: int, limit: int = MAX_METADATA_RECORDS) -> Select:
+    """
+    Newest ``limit`` metadata rows for every aircraft seen since ``cutoff``, in one statement.
+
+    A correlated top-N subquery per aircraft: each one is a seek on the
+    ``(aircraft_id, system_timestamp)`` index reading ``limit`` rows, so the cost
+    is O(aircraft in window) regardless of how much history the table holds. A
+    window function would read every row of every in-window aircraft instead.
+
+    Rows come back grouped by aircraft, newest first within each group.
+    """
+    t = aliased(AircraftMetadata)
+    latest_ids = (
+        select(t.id)
+        .where(t.aircraft_id == Aircraft.id)
+        .order_by(t.system_timestamp.desc())
+        .limit(limit)
+        .correlate(Aircraft)
+        .scalar_subquery()
+    )
+    return (
+        select(AircraftMetadata)
+        .join(Aircraft, AircraftMetadata.id.in_(latest_ids))
+        .where(Aircraft.lastseen >= cutoff)
+        .order_by(AircraftMetadata.aircraft_id, AircraftMetadata.system_timestamp.desc())
+    )
 
 
 def create_app(
@@ -155,8 +185,10 @@ def create_app(
         """
         Get all currently tracked aircraft.
 
-        Nothing is ever purged, so widening ``max_age`` brings back aircraft that
-        have aged out of the default window.
+        Aircraft are never purged, so widening ``max_age`` brings back aircraft
+        that have aged out of the default window. Reception metadata is only kept
+        for the backend's ``--metadata-retention`` window, so aircraft older than
+        that come back with an empty ``metadata`` list.
 
         Parameters
         ----------
@@ -170,21 +202,18 @@ def create_app(
         list[AircraftStateSchema]
             List of aircraft state vectors
         """
+        cutoff = seen_since(max_age)
         aircraft_list = (
-            session.query(Aircraft).filter(Aircraft.lastseen >= seen_since(max_age)).all()
+            session.query(Aircraft).filter(Aircraft.lastseen >= cutoff).order_by(Aircraft.id).all()
         )
+
+        # One statement for everyone's newest metadata, not one per aircraft.
+        by_aircraft: dict[int, list[AircraftMetadata]] = defaultdict(list)
+        for m in session.execute(latest_metadata_stmt(cutoff)).scalars():
+            by_aircraft[m.aircraft_id].append(m)
 
         result = []
         for aircraft in aircraft_list:
-            # Get limited metadata (last N messages)
-            reception_metadata = (
-                session.query(AircraftMetadata)
-                .filter_by(aircraft_id=aircraft.id)
-                .order_by(AircraftMetadata.system_timestamp.desc())
-                .limit(MAX_METADATA_RECORDS)
-                .all()
-            )
-
             aircraft_dict = {
                 "icao24": aircraft.icao24,
                 "firstseen": aircraft.firstseen,
@@ -215,7 +244,7 @@ def create_app(
                         "rssi": m.rssi,
                         "serial": m.serial,
                     }
-                    for m in reception_metadata
+                    for m in by_aircraft.get(aircraft.id, [])
                 ],
             }
             result.append(AircraftStateSchema(**aircraft_dict))

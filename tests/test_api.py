@@ -5,8 +5,9 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event, insert, text
 
-from adsb.api import create_app, get_db
+from adsb.api import MAX_METADATA_RECORDS, create_app, get_db
 from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
 
 
@@ -313,3 +314,102 @@ def test_backend_has_no_cors(client):
     response = client.get("/api", headers={"Origin": "http://localhost:3000"})
     assert response.status_code == 200
     assert "access-control-allow-origin" not in response.headers
+
+
+def add_metadata(session, aircraft_id, timestamps):
+    session.execute(
+        insert(AircraftMetadata),
+        [
+            {"aircraft_id": aircraft_id, "system_timestamp": ts, "nanoseconds": 0, "rssi": -10.0}
+            for ts in timestamps
+        ],
+    )
+
+
+def test_all_metadata_is_newest_first_and_capped(test_session, client):
+    """Each aircraft carries its newest MAX_METADATA_RECORDS rows, newest first."""
+    now = int(time.time())
+    a1 = Aircraft(icao24="aaa111", firstseen=now, lastseen=now, count=1)
+    a2 = Aircraft(icao24="bbb222", firstseen=now, lastseen=now, count=1)
+    old = Aircraft(icao24="old333", firstseen=now - 900, lastseen=now - 900, count=1)
+    test_session.add_all([a1, a2, old])
+    test_session.flush()
+    add_metadata(test_session, a1.id, [now - 3, now - 5, now - 1, now - 6, now - 2, now - 4])
+    add_metadata(test_session, a2.id, [now - 7, now - 8])
+    add_metadata(
+        test_session, old.id, [now - 1]
+    )  # newest row of all, but aircraft is out of window
+    test_session.commit()
+
+    data = client.get("/api/all?max_age=300").json()
+
+    assert [a["icao24"] for a in data] == ["aaa111", "bbb222"]
+    by_icao = {a["icao24"]: [m["system_timestamp"] for m in a["metadata"]] for a in data}
+    assert by_icao["aaa111"] == [now - 1, now - 2, now - 3, now - 4]
+    assert len(by_icao["aaa111"]) == MAX_METADATA_RECORDS
+    assert by_icao["bbb222"] == [now - 7, now - 8]
+
+
+def count_statements_touching(engine, table):
+    """Collect the SQL statements that reference ``table`` while the returned list is live."""
+    seen = []
+
+    def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        if table in statement:
+            seen.append(statement)
+
+    event.listen(engine, "before_cursor_execute", before_cursor_execute)
+    return seen, lambda: event.remove(engine, "before_cursor_execute", before_cursor_execute)
+
+
+def test_all_uses_bounded_number_of_queries(test_db, test_session, client):
+    """Regression: /api/all once ran one unindexed metadata query per aircraft.
+
+    On an overnight database (2M metadata rows, 75 aircraft in the window) that
+    took 7 seconds per poll. The metadata must come from a single statement.
+    """
+    now = int(time.time())
+    aircraft = [
+        Aircraft(icao24=f"ac{i:04d}", firstseen=now, lastseen=now, count=1) for i in range(5)
+    ]
+    test_session.add_all(aircraft)
+    test_session.flush()
+    rows_per_aircraft = 20_000
+    for i, a in enumerate(aircraft):
+        # Interleave timestamps across aircraft so "newest" is not "highest id".
+        add_metadata(
+            test_session, a.id, [now - 100_000 + j * 5 + i for j in range(rows_per_aircraft)]
+        )
+    test_session.commit()
+
+    seen, remove = count_statements_touching(test_db.engine, "aircraft_metadata")
+    try:
+        response = client.get("/api/all?max_age=300")
+    finally:
+        remove()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 5
+    for i, a in enumerate(data):
+        newest = now - 100_000 + (rows_per_aircraft - 1) * 5 + i
+        assert [m["system_timestamp"] for m in a["metadata"]] == [newest - 5 * k for k in range(4)]
+    assert len(seen) == 1, seen
+
+
+def test_latest_metadata_query_uses_index(test_db):
+    """The one metadata statement must seek the composite index, never scan the table."""
+    from sqlalchemy.dialects import sqlite
+
+    from adsb.api import latest_metadata_stmt
+
+    sql = str(
+        latest_metadata_stmt(cutoff=0).compile(
+            dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+    with test_db.engine.connect() as conn:
+        plan = [row[-1] for row in conn.execute(text(f"EXPLAIN QUERY PLAN {sql}"))]
+
+    assert not any("SCAN aircraft_metadata" in step for step in plan), plan
+    assert any("ix_aircraft_metadata_aircraft_id_system_timestamp" in step for step in plan), plan

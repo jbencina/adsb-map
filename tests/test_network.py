@@ -318,3 +318,83 @@ def test_read_beast_buffer_survives_any_split(test_db, split):
 
     assert [(row[0], row[2]) for row in rows] == [(ESCAPED_MSG, beast_signal_to_dbfs(0x1A))]
     assert client.buffer == []
+
+
+def seed_old_metadata(test_db, age_seconds):
+    with test_db.get_session() as session:
+        aircraft = Aircraft(icao24="old123", firstseen=1, lastseen=1, count=1)
+        session.add(aircraft)
+        session.flush()
+        session.add(
+            AircraftMetadata(
+                aircraft_id=aircraft.id, system_timestamp=time.time() - age_seconds, nanoseconds=0
+            )
+        )
+
+
+def metadata_ages(test_db):
+    with test_db.get_session() as session:
+        now = time.time()
+        return sorted(now - m.system_timestamp for m in session.query(AircraftMetadata).all())
+
+
+def test_handle_messages_purges_metadata_older_than_retention(test_db):
+    """Old reception metadata is trimmed as messages arrive; the fresh row stays."""
+    seed_old_metadata(test_db, age_seconds=7200)
+    client = ADSBNetworkClient(
+        host="localhost",
+        port=1,
+        rawtype="beast",
+        database=test_db,
+        metadata_retention=3600,
+        cleanup_interval=0,
+    )
+
+    client.handle_messages([(LONG_MSG, time.time(), -12.5)])
+
+    ages = metadata_ages(test_db)
+    assert len(ages) == 1 and ages[0] < 60
+
+
+def test_handle_messages_retention_zero_never_purges(test_db):
+    seed_old_metadata(test_db, age_seconds=7200)
+    client = ADSBNetworkClient(
+        host="localhost",
+        port=1,
+        rawtype="beast",
+        database=test_db,
+        metadata_retention=0,
+        cleanup_interval=0,
+    )
+
+    client.handle_messages([(LONG_MSG, time.time(), -12.5)])
+
+    assert len(metadata_ages(test_db)) == 2
+
+
+def test_handle_messages_purges_once_per_cleanup_interval(test_db):
+    """The purge is a table-wide DELETE, so it must not run on every batch."""
+    from sqlalchemy import event
+
+    client = ADSBNetworkClient(
+        host="localhost",
+        port=1,
+        rawtype="beast",
+        database=test_db,
+        metadata_retention=3600,
+        cleanup_interval=3600,
+    )
+    deletes = []
+
+    def spy(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("DELETE FROM aircraft_metadata"):
+            deletes.append(statement)
+
+    event.listen(test_db.engine, "before_cursor_execute", spy)
+    try:
+        client.handle_messages([(LONG_MSG, time.time(), -12.5)])
+        client.handle_messages([(LONG_MSG, time.time(), -12.5)])
+    finally:
+        event.remove(test_db.engine, "before_cursor_execute", spy)
+
+    assert len(deletes) == 1

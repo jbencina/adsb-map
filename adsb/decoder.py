@@ -4,6 +4,7 @@ import logging
 import time
 
 import pyModeS as pms
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from adsb.aircraft_db import get_database
@@ -26,8 +27,8 @@ class ADSBDecoder:
     stale_timeout : int, optional
         Seconds of silence after which an aircraft heard again is a new contact: its
         previous flight's live state is cleared before the new frame is applied
-        (rows are never deleted automatically). Also the cutoff for the manual
-        ``adsb cleanup`` command via :meth:`cleanup_stale_aircraft`. By default 60.
+        (aircraft rows are never deleted automatically). Also the cutoff for the
+        manual ``adsb cleanup`` command via :meth:`cleanup_stale_aircraft`. By default 60.
     """
 
     def __init__(
@@ -407,3 +408,34 @@ class ADSBDecoder:
         # Flush to make deletions effective, but commit is handled by context manager
         self.session.flush()
         return count
+
+    def purge_old_metadata(self, retention: int, now: float | None = None) -> int:
+        """
+        Delete reception metadata older than ``retention`` seconds.
+
+        Metadata (RSSI, receiver serial) is only ever shown for live aircraft, and
+        positions are stored separately, so keeping more than an hour of it just
+        makes the table grow without bound. One bulk DELETE; the table stays small
+        enough that filtering on ``system_timestamp`` needs no index.
+
+        Parameters
+        ----------
+        retention : int
+            Window in seconds; 0 or less keeps everything
+        now : float, optional
+            Reference time, by default the current time (injectable for tests)
+
+        Returns
+        -------
+        int
+            Number of rows deleted
+        """
+        if retention <= 0:
+            return 0
+        cutoff = (time.time() if now is None else now) - retention
+        result = self.session.execute(
+            delete(AircraftMetadata)
+            .where(AircraftMetadata.system_timestamp < cutoff)
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount

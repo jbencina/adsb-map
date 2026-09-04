@@ -9,11 +9,11 @@ per hour. The network client upserts deltas for every batch it decodes.
 
 import time
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import Select, delete, desc, func, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from adsb.models import AircraftHourly, AircraftMetadata, TrafficMinute
+from adsb.models import Aircraft, AircraftHourly, AircraftMetadata, TrafficMinute
 
 TRAFFIC_RETENTION = 7 * 86400  # seconds of aggregate history kept
 
@@ -116,3 +116,58 @@ def backfill_traffic(session: Session) -> bool:
         )
     )
     return True
+
+
+def buckets_stmt(since: int, interval: int) -> Select:
+    """
+    Per-bucket totals since ``since``: sum of messages, max of per-minute aircraft.
+
+    ``minute`` is the table's INTEGER PRIMARY KEY, so the range is a rowid seek.
+    Floor division (SQLAlchemy 2 renders plain ``/`` as true division).
+    """
+    bucket = (TrafficMinute.minute // interval) * interval
+    return (
+        select(
+            bucket.label("start"),
+            func.sum(TrafficMinute.messages),
+            func.max(TrafficMinute.aircraft),
+        )
+        .where(TrafficMinute.minute >= since)
+        .group_by(bucket)
+        .order_by(bucket)
+    )
+
+
+def aircraft_seen_stmt(since_hour: int) -> Select:
+    """Distinct aircraft with any traffic in hours at or after ``since_hour``."""
+    return select(func.count(func.distinct(AircraftHourly.aircraft_id))).where(
+        AircraftHourly.hour >= since_hour
+    )
+
+
+def top_window_stmt(since_hour: int, limit: int) -> Select:
+    """``(Aircraft, messages)`` ranked by messages in hours at or after ``since_hour``."""
+    total = func.sum(AircraftHourly.messages).label("messages")
+    return (
+        select(Aircraft, total)
+        .join(AircraftHourly, AircraftHourly.aircraft_id == Aircraft.id)
+        .where(AircraftHourly.hour >= since_hour)
+        .group_by(Aircraft.id)
+        .order_by(desc(total))
+        .limit(limit)
+    )
+
+
+def top_lifetime_stmt(limit: int) -> Select:
+    """Aircraft ranked by lifetime message count, via the ``count`` index."""
+    return select(Aircraft).order_by(Aircraft.count.desc()).limit(limit)
+
+
+def fill_buckets(rows, since: int, end: int, interval: int) -> list[dict]:
+    """Expand sparse ``(start, messages, aircraft)`` rows into a full zero-filled grid."""
+    by_start = {int(start): (int(m), int(a)) for start, m, a in rows}
+    out = []
+    for start in range(since, end, interval):
+        messages, aircraft = by_start.get(start, (0, 0))
+        out.append({"start": start, "messages": messages, "aircraft": aircraft})
+    return out

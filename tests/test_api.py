@@ -16,6 +16,14 @@ from adsb.api import (
     tracks_stmt,
 )
 from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
+from adsb.traffic import (
+    buckets_stmt,
+    hour_of,
+    minute_of,
+    record_batch,
+    top_lifetime_stmt,
+    top_window_stmt,
+)
 from tests.helpers import add_metadata, query_plan, statements_containing
 
 
@@ -347,6 +355,7 @@ def test_max_metadata_records_constant(test_db):
         ("/api/icao24", 200),
         ("/api/track?icao24=abc123", 200),  # Returns empty list for not found
         ("/api/sensors", 200),
+        ("/api/stats", 200),
     ],
 )
 def test_api_endpoints_exist(test_db, endpoint, expected_status):
@@ -460,8 +469,18 @@ def test_all_uses_bounded_number_of_queries(test_db, test_session, client):
         (latest_metadata_stmt(cutoff=0), "ix_aircraft_metadata_aircraft_id_system_timestamp"),
         (track_stmt(aircraft_id=1, since=0), "ix_aircraft_positions_aircraft_id_timestamp"),
         (tracks_stmt(since=0), "ix_aircraft_positions_timestamp"),
+        # /api/stats: the minute table is keyed by its INTEGER PRIMARY KEY (rowid)
+        (buckets_stmt(since=0, interval=900), "USING INTEGER PRIMARY KEY"),
+        (top_window_stmt(since_hour=0, limit=10), "ix_aircraft_hourly_hour"),
     ],
-    ids=["aircraft_since", "latest_metadata", "track", "tracks"],
+    ids=[
+        "aircraft_since",
+        "latest_metadata",
+        "track",
+        "tracks",
+        "stats_buckets",
+        "stats_top_window",
+    ],
 )
 def test_hot_statements_seek_their_index(test_db, stmt, index):
     """The statements behind /api/all and /api/track must seek, never scan, a table."""
@@ -469,3 +488,66 @@ def test_hot_statements_seek_their_index(test_db, stmt, index):
 
     assert any(index in step for step in plan), plan
     assert not any(step.startswith("SCAN ") for step in plan), plan
+
+
+def test_stats_buckets_are_aligned_and_zero_filled(test_db, test_session):
+    now = int(time.time())
+    a = Aircraft(icao24="aaa111", firstseen=now - 7200, lastseen=now, callsign="ONE", count=50)
+    b = Aircraft(
+        icao24="bbb222", firstseen=now - 7200, lastseen=now - 60, callsign="TWO", count=900
+    )
+    test_session.add_all([a, b])
+    test_session.commit()
+    record_batch(
+        test_session,
+        {minute_of(now): (10, 2), minute_of(now - 120): (4, 5)},
+        {(a.id, hour_of(now)): 12, (b.id, hour_of(now)): 2},
+    )
+    test_session.commit()
+    client = TestClient(create_app(test_db))
+
+    r = client.get("/api/stats?window=3600&interval=600&limit=5")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["window"] == 3600 and data["interval"] == 600
+    assert len(data["buckets"]) == 6
+    assert all(bucket["start"] % 600 == 0 for bucket in data["buckets"])
+    assert data["buckets"][-1]["start"] + 600 >= data["now"]
+    assert sum(bucket["messages"] for bucket in data["buckets"]) == 14
+    assert max(bucket["aircraft"] for bucket in data["buckets"]) == 5
+    assert data["aircraft_seen"] == 2
+    assert [t["icao24"] for t in data["top_window"]] == ["aaa111", "bbb222"]
+    assert data["top_window"][0]["messages"] == 12
+    assert [t["icao24"] for t in data["top_lifetime"]] == ["bbb222", "aaa111"]
+    assert data["top_lifetime"][0]["messages"] == 900
+    assert data["top_lifetime"][0]["callsign"] == "TWO"
+
+
+def test_stats_rejects_interval_that_does_not_divide_window(client):
+    assert client.get("/api/stats?window=3600&interval=700").status_code == 422
+
+
+def test_stats_empty_database_returns_full_zero_grid(client):
+    data = client.get("/api/stats").json()
+    assert len(data["buckets"]) == 96
+    assert data["top_window"] == [] and data["top_lifetime"] == []
+    assert data["aircraft_seen"] == 0
+
+
+def test_stats_uses_a_bounded_number_of_queries(test_db, test_session):
+    """Four statements no matter how many aircraft or minutes are stored."""
+    now = int(time.time())
+    for i in range(5):
+        test_session.add(Aircraft(icao24=f"c0000{i}", firstseen=now, lastseen=now, count=i))
+    test_session.commit()
+    client = TestClient(create_app(test_db))
+    with statements_containing(test_db.engine, "SELECT") as seen:
+        assert client.get("/api/stats").status_code == 200
+    assert len(seen) == 4, seen
+
+
+def test_lifetime_top_list_walks_the_count_index(test_db):
+    """ORDER BY count DESC LIMIT n reads n index entries, not every aircraft ever seen."""
+    plan = query_plan(test_db.engine, top_lifetime_stmt(limit=10))
+    assert any("USING INDEX ix_aircraft_count" in step for step in plan), plan
+    assert not any("TEMP B-TREE" in step for step in plan), plan

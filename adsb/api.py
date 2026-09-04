@@ -7,7 +7,7 @@ that proxies to this one, so nothing here serves HTML, static files or CORS.
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session, aliased
 
@@ -15,7 +15,21 @@ from adsb import __version__
 from adsb.aircraft_db import AIRCRAFT_DB_ATTRIBUTION
 from adsb.database import Database
 from adsb.models import Aircraft, AircraftMetadata, AircraftPosition
-from adsb.schemas import AircraftStateSchema, SensorSchema, TrackPointSchema
+from adsb.schemas import (
+    AircraftStateSchema,
+    SensorSchema,
+    StatsSchema,
+    TopAircraftSchema,
+    TrackPointSchema,
+)
+from adsb.traffic import (
+    aircraft_seen_stmt,
+    buckets_stmt,
+    fill_buckets,
+    hour_of,
+    top_lifetime_stmt,
+    top_window_stmt,
+)
 
 # Constants
 MAX_METADATA_RECORDS = 4  # Match jet1090 API format - last 4 reception metadata
@@ -40,6 +54,9 @@ def api_index() -> dict:
                 "returns the trajectories of all aircraft, keyed by icao24"
             ),
             "/api/sensors": "returns information about all sensors",
+            "/api/stats?window={seconds}&interval={seconds}&limit={n}": (
+                "traffic history: messages and peak aircraft per interval, top aircraft"
+            ),
             "/docs": "interactive OpenAPI documentation",
         },
         "map_ui": "run `adsb start frontend --api-url <this server>` and open its port",
@@ -436,5 +453,73 @@ def create_app(
         )
 
         return [SensorSchema(serial=serial[0]) for serial in serials]
+
+    @app.get("/api/stats", response_model=StatsSchema)
+    async def get_stats(
+        window: int = Query(86400, ge=60, le=604800, description="History window in seconds"),
+        interval: int = Query(900, ge=60, le=86400, description="Bucket size in seconds"),
+        limit: int = Query(10, ge=1, le=100, description="Rows per top-aircraft list"),
+        session: Session = Depends(get_session),
+    ):
+        """
+        Traffic history for the map's history view.
+
+        Buckets are aligned to ``interval`` and end at the current interval, so
+        the last bucket is partial. ``aircraft`` per bucket is the peak number
+        of distinct aircraft heard in any single minute of that bucket. The top
+        lists rank aircraft by messages within the window (rounded down to the
+        hour the window starts in) and by lifetime message count. Read from the
+        per-minute and per-aircraft-hour aggregates, never the per-message rows.
+
+        Parameters
+        ----------
+        window : int
+            Seconds of history, default one day
+        interval : int
+            Bucket size in seconds; must divide ``window`` evenly
+        limit : int
+            Rows in each top list
+        session : Session
+            Database session
+
+        Returns
+        -------
+        StatsSchema
+            Zero-filled bucket grid plus both top lists
+        """
+        if window % interval:
+            raise HTTPException(status_code=422, detail="interval must divide window evenly")
+        now = int(time.time())
+        end = (now // interval + 1) * interval
+        since = end - window
+        since_hour = hour_of(since)
+
+        rows = session.execute(buckets_stmt(since, interval)).all()
+        buckets = fill_buckets(rows, since, end, interval)
+        aircraft_seen = session.execute(aircraft_seen_stmt(since_hour)).scalar() or 0
+
+        def row(aircraft: Aircraft, messages: int) -> TopAircraftSchema:
+            return TopAircraftSchema(
+                icao24=aircraft.icao24,
+                callsign=aircraft.callsign,
+                registration=aircraft.registration,
+                typecode=aircraft.typecode,
+                messages=messages,
+                lastseen=aircraft.lastseen,
+            )
+
+        top_window = [row(a, m) for a, m in session.execute(top_window_stmt(since_hour, limit))]
+        top_lifetime = [
+            row(a, a.count) for a in session.execute(top_lifetime_stmt(limit)).scalars()
+        ]
+        return StatsSchema(
+            now=now,
+            window=window,
+            interval=interval,
+            aircraft_seen=aircraft_seen,
+            buckets=buckets,
+            top_window=top_window,
+            top_lifetime=top_lifetime,
+        )
 
     return app

@@ -8,6 +8,7 @@ from adsb.models import Aircraft, AircraftHourly, TrafficMinute
 from adsb.traffic import (
     TRAFFIC_RETENTION,
     backfill_traffic,
+    fill_buckets,
     hour_of,
     minute_of,
     purge_traffic,
@@ -90,3 +91,12 @@ def test_backfill_is_a_no_op_when_aggregates_exist(test_db, aircraft):
 def test_backfill_is_a_no_op_without_metadata(test_db):
     with test_db.get_session() as session:
         assert backfill_traffic(session) is False
+
+
+def test_fill_buckets_zero_fills_and_aligns():
+    rows = [(1200, 5, 2)]  # (bucket start, messages, aircraft)
+    out = fill_buckets(rows, since=600, end=1800, interval=600)
+    assert out == [
+        {"start": 600, "messages": 0, "aircraft": 0},
+        {"start": 1200, "messages": 5, "aircraft": 2},
+    ]

@@ -145,3 +145,60 @@ class SensorSchema(BaseModel):
     serial: int
 
     model_config = {"from_attributes": True}
+
+
+class StatsBucketSchema(BaseModel):
+    """
+    One interval of the traffic history.
+
+    Attributes
+    ----------
+    start : int
+        Unix timestamp the interval begins at
+    messages : int
+        Messages attributed to an aircraft in the interval
+    aircraft : int
+        Peak number of distinct aircraft heard in any one minute of the interval
+    """
+
+    start: int
+    messages: int
+    aircraft: int
+
+
+class TopAircraftSchema(BaseModel):
+    """One row of a top-aircraft table."""
+
+    icao24: str
+    callsign: str | None = None
+    registration: str | None = None
+    typecode: str | None = None
+    messages: int
+    lastseen: int
+
+
+class StatsSchema(BaseModel):
+    """
+    Response of ``/api/stats``.
+
+    Attributes
+    ----------
+    now : int
+        Server time the response was built at
+    window, interval : int
+        Echo of the request, in seconds
+    aircraft_seen : int
+        Distinct aircraft heard in the window
+    buckets : list[StatsBucketSchema]
+        Full grid, oldest first, ending in the current (partial) interval
+    top_window, top_lifetime : list[TopAircraftSchema]
+        Aircraft ranked by messages in the window and by lifetime message count
+    """
+
+    now: int
+    window: int
+    interval: int
+    aircraft_seen: int
+    buckets: list[StatsBucketSchema]
+    top_window: list[TopAircraftSchema]
+    top_lifetime: list[TopAircraftSchema]

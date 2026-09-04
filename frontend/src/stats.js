@@ -41,7 +41,7 @@ export function gridValues(max) {
 }
 
 // Seconds between x-axis labels for each bucket size; all divide a day evenly.
-const TICK_EVERY = { 300: 3600, 900: 3 * 3600, 3600: 4 * 3600 }
+const TICK_EVERY = { 300: 2 * 3600, 900: 3 * 3600, 3600: 4 * 3600 }
 
 const hourLabel = seconds =>
   new Date(seconds * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -55,13 +55,19 @@ export function timeTicks(buckets, interval) {
     .map(({ index, start }) => ({ index, label: hourLabel(start) }))
 }
 
-/** `just now`, `4 min ago`, `3 h ago`, `2 d ago`. */
+/** `just now`, `4 min ago`, `3h 12m ago`, `2 days ago`. */
 export function relativeTime(seconds, now = Date.now() / 1000) {
   const age = Math.max(0, now - seconds)
   if (age < 60) return 'just now'
   if (age < 3600) return `${Math.floor(age / 60)} min ago`
-  if (age < 86400) return `${Math.floor(age / 3600)} h ago`
-  return `${Math.floor(age / 86400)} d ago`
+  if (age < 86400) return `${Math.floor(age / 3600)}h ${Math.floor((age % 3600) / 60)}m ago`
+  const days = Math.floor(age / 86400)
+  return `${days} ${days === 1 ? 'day' : 'days'} ago`
+}
+
+/** Milliseconds until the next wall-clock minute begins (plus a little slack). */
+export function msUntilNextMinute(nowMs = Date.now()) {
+  return 60000 - (nowMs % 60000) + 500
 }
 
 /** `9:00 AM – 9:15 AM`, for bar tooltips. */

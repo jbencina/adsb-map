@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { bucketRange, formatCount, gridValues, niceMax, relativeTime, timeTicks } from './stats'
+import {
+  bucketRange,
+  formatCount,
+  gridValues,
+  msUntilNextMinute,
+  niceMax,
+  relativeTime,
+  timeTicks,
+} from './stats'
 
 describe('formatCount', () => {
   test('groups thousands below 10k and abbreviates above', () => {
@@ -46,8 +54,8 @@ describe('timeTicks', () => {
     expect(typeof ticks[0].label).toBe('string')
   })
 
-  test('labels every hour for 5-minute buckets and every 4 hours for hourly', () => {
-    expect(timeTicks(grid(288, 300), 300).length).toBe(24)
+  test('labels every 2 hours for 5-minute buckets and every 4 hours for hourly', () => {
+    expect(timeTicks(grid(288, 300), 300).length).toBe(12)
     expect(timeTicks(grid(24, 3600), 3600).length).toBe(6)
   })
 })
@@ -57,8 +65,17 @@ describe('relativeTime', () => {
     const now = 1000000
     expect(relativeTime(now - 20, now)).toBe('just now')
     expect(relativeTime(now - 240, now)).toBe('4 min ago')
-    expect(relativeTime(now - 3 * 3600 - 10, now)).toBe('3 h ago')
-    expect(relativeTime(now - 2 * 86400, now)).toBe('2 d ago')
+    expect(relativeTime(now - 3 * 3600 - 12 * 60 - 10, now)).toBe('3h 12m ago')
+    expect(relativeTime(now - 3 * 3600, now)).toBe('3h 0m ago')
+    expect(relativeTime(now - 86400 - 10, now)).toBe('1 day ago')
+    expect(relativeTime(now - 2 * 86400, now)).toBe('2 days ago')
+  })
+})
+
+describe('msUntilNextMinute', () => {
+  test('lands just after the next minute boundary', () => {
+    expect(msUntilNextMinute(60000 * 5 + 15000)).toBe(45500)
+    expect(msUntilNextMinute(60000 * 5)).toBe(60500)
   })
 })
 

@@ -4,13 +4,13 @@
 
 import { useEffect, useState } from 'react'
 import { fetchStats } from '../services/api'
-import { HISTORY_WINDOW } from '../stats'
+import { HISTORY_WINDOW, msUntilNextMinute } from '../stats'
 
-const REFRESH_MS = 60000
 const TOP_LIMIT = 10
 
 /**
- * Hook to fetch the traffic history and refresh it once a minute
+ * Hook to fetch the traffic history and refresh it at the top of every minute,
+ * when the backend's per-minute aggregates roll over
  *
  * @param {boolean} open - Fetch only while the view is showing
  * @param {number} interval - Bucket size in seconds; a change refetches at once
@@ -24,6 +24,7 @@ export function useStats(open, interval) {
   useEffect(() => {
     if (!open) return undefined
     let cancelled = false
+    let timer
     const load = async () => {
       setLoading(true)
       try {
@@ -35,14 +36,16 @@ export function useStats(open, interval) {
         console.error('Error fetching traffic history:', err)
         if (!cancelled) setError(err.message)
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+          timer = setTimeout(load, msUntilNextMinute())
+        }
       }
     }
     load()
-    const timer = setInterval(load, REFRESH_MS)
     return () => {
       cancelled = true
-      clearInterval(timer)
+      clearTimeout(timer)
     }
   }, [open, interval])
 

@@ -1,9 +1,7 @@
 default:
     @just --list
 
-# Run backend + Vite dev server (hot reload) on this machine.
-# Pass extra args straight through to `adsb start backend`.
-# Example: just dev --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+# Run backend and Vite dev servers together; pass ARGS to `adsb start backend`.
 dev *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -11,29 +9,6 @@ dev *ARGS:
     uv run adsb start backend {{ARGS}} &
     (cd frontend && bun run dev) &
     wait
-
-# Run only the Vite dev server, proxying /api/* to a backend (local or remote).
-# Example: just dev-frontend http://receiver.local:8000
-dev-frontend API_URL="http://localhost:8000":
-    cd frontend && ADSB_API_URL={{API_URL}} bun run dev
-
-# Vite dev server with simulated aircraft; no backend needed.
-dev-demo:
-    cd frontend && bun run dev:demo
-
-# Run the decoder + API.
-# Example: just backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
-backend *ARGS:
-    uv run adsb start backend {{ARGS}}
-
-# Run the bundled map UI against a backend (run `just build` first).
-# Example: just frontend http://receiver.local:8000 --host 0.0.0.0
-frontend API_URL="http://127.0.0.1:8000" *ARGS:
-    uv run adsb start frontend --api-url {{API_URL}} {{ARGS}}
-
-# Bundled map UI with simulated aircraft; no backend needed (run `just build` first).
-demo *ARGS:
-    uv run adsb start frontend --demo {{ARGS}}
 
 # Install the frontend toolchain. Run once on a fresh checkout.
 bootstrap:
@@ -46,8 +21,7 @@ bootstrap:
         echo 'bun installed - add to PATH: export PATH="$HOME/.bun/bin:$PATH"'
     fi
 
-# Build frontend and stage into adsb/static so `adsb start frontend` and the wheel can serve it.
-# Preserves the tracked .gitkeep so `git status` stays clean after building.
+# Build the frontend and stage it into the Python package.
 build:
     #!/usr/bin/env bash
     set -euo pipefail

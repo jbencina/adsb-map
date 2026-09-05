@@ -191,7 +191,7 @@ For UI development against a remote backend, the Vite dev server proxies the sam
 
 ```bash
 cd frontend
-ADSB_API_URL=http://receiver.local:8000 bun run dev        # or: just dev-frontend http://receiver.local:8000
+ADSB_API_URL=http://receiver.local:8000 bun run dev
 ```
 
 `ADSB_API_URL` is a shell variable on the command line, not a `.env` entry. Same story for
@@ -203,7 +203,7 @@ To try the map, or work on the UI, without a receiver or backend at all, add `--
 
 ```bash
 adsb start frontend --demo                 # bundled UI
-cd frontend && bun run dev:demo            # or: just dev-demo (Vite, hot reload)
+cd frontend && bun run dev:demo            # Vite, hot reload
 ```
 
 The browser then answers every API call from a built-in simulator: a fixed fleet of
@@ -231,9 +231,10 @@ and prunes stale aircraft every 30 seconds.
 
 ## Develop from source
 
-The repo uses [`just`](https://github.com/casey/just) to run backend and frontend together
-with hot reload. Building the UI from source needs a JS toolchain — end users installing
-the wheel do not.
+The repo uses [`just`](https://github.com/casey/just) for setup, running both development
+servers, building the bundled UI, and cleaning generated assets. Run individual services
+with `uv run adsb …` or Bun directly. Building the UI from source needs a JS toolchain —
+end users installing the wheel do not.
 
 ```bash
 # Prerequisites (once per machine)
@@ -254,17 +255,27 @@ just dev --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 
 Visit http://localhost:3000/. Vite proxies `/api/*` to the backend on port 8000 and serves
 its own `/config.js` from `MAPBOX_TOKEN` in the repo-root `.env`, so the dev UI behaves exactly like
-`adsb start frontend`. To run the halves separately: `just backend …` and
-`just dev-frontend [URL]` (Vite, proxying to `URL`, default `http://localhost:8000`).
+`adsb start frontend`. To run the halves separately, use these in two terminals:
+
+```bash
+uv run adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+cd frontend && bun run dev
+```
+
+Vite proxies to `http://localhost:8000` by default. Set `ADSB_API_URL` on the Bun
+command to use a remote backend, as shown above.
 
 To exercise the production-style bundled frontend locally:
 
 ```bash
 just build                                                # frontend → adsb/static/ (needs bun)
-just backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
-MAPBOX_TOKEN=pk.… just frontend                           # or: just frontend http://receiver:8000
+MAPBOX_TOKEN=pk.… uv run adsb start all --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 # Visit http://localhost:3000/
 ```
+
+`adsb start all` runs the backend and bundled UI together. Use `just dev` when
+editing the frontend: it runs Vite so source changes appear without rebuilding.
+For a remote backend, run only `uv run adsb start frontend --api-url http://receiver:8000`.
 
 ### Tests, linting, formatting
 

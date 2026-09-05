@@ -329,7 +329,9 @@ def tracks_update(
 
     A cursor ahead of the table means the table was emptied and row ids are
     being reused (``adsb cleanup``, or a rebuilt database); the stream starts
-    over from the window rather than waiting for ids to catch up.
+    over from the window rather than waiting for ids to catch up. Known limit:
+    a table emptied and refilled past the old cursor within one tick is not
+    told apart from normal growth, which takes a near-empty database.
     """
     if cursor is not None and cursor > newest_position_id(session):
         cursor = None

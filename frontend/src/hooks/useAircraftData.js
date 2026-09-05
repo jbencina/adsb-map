@@ -1,15 +1,18 @@
 /**
- * Custom hook for fetching and managing aircraft data
+ * Custom hook that holds the live aircraft list
  */
 
-import { useState, useEffect, useCallback } from 'react'
-import { fetchAllAircraft } from '../services/api'
+import { useState, useEffect } from 'react'
+import { subscribeAircraft } from '../services/api'
 
 /**
- * Hook to fetch and poll aircraft data
+ * Hook that subscribes to the aircraft feed
  *
- * @param {number} refreshInterval - Refresh interval in seconds
- * @param {number} maxAgeMinutes - Only aircraft seen within this many minutes; a change refetches at once
+ * Every update is the whole age window, so it replaces the list held; the
+ * backend filters by age and the interval sets how often it sends.
+ *
+ * @param {number} refreshInterval - Seconds between updates
+ * @param {number} maxAgeMinutes - Only aircraft seen within this many minutes; a change resubscribes at once
  * @returns {Object} Object containing aircraft data, loading state, error, and last update time
  */
 export function useAircraftData(refreshInterval, maxAgeMinutes) {
@@ -18,30 +21,26 @@ export function useAircraftData(refreshInterval, maxAgeMinutes) {
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  const fetchAircraft = useCallback(async () => {
-    try {
-      const data = await fetchAllAircraft(maxAgeMinutes * 60)
-      setAircraft(data)
-      setLastUpdate(new Date())
-      setError(null)
-      setLoading(false)
-      return data
-    } catch (err) {
-      console.error('Error fetching aircraft data:', err)
-      setError(err.message)
-      setLoading(false)
-      return null
-    }
-  }, [maxAgeMinutes])
+  useEffect(
+    () =>
+      subscribeAircraft(
+        { maxAgeSeconds: maxAgeMinutes * 60, intervalSeconds: refreshInterval },
+        {
+          onUpdate: data => {
+            setAircraft(data)
+            setLastUpdate(new Date())
+            setError(null)
+            setLoading(false)
+          },
+          onError: err => {
+            console.error('Aircraft stream:', err)
+            setError(err.message)
+            setLoading(false)
+          },
+        }
+      ),
+    [refreshInterval, maxAgeMinutes]
+  )
 
-  useEffect(() => {
-    // Initial fetch and polling - this setState is intentional.
-    // Re-runs when the window changes so older aircraft appear without waiting a tick.
-    fetchAircraft()
-    const interval = setInterval(fetchAircraft, refreshInterval * 1000)
-
-    return () => clearInterval(interval)
-  }, [refreshInterval, fetchAircraft])
-
-  return { aircraft, loading, error, lastUpdate, refetch: fetchAircraft }
+  return { aircraft, loading, error, lastUpdate }
 }

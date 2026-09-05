@@ -1,5 +1,12 @@
-import { afterEach, describe, expect, test } from 'bun:test'
-import { fetchAircraftTrack, fetchAircraftTracks, fetchStats, fetchTracks } from './api'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import {
+  fetchAircraftTrack,
+  fetchAircraftTracks,
+  fetchStats,
+  fetchTracks,
+  subscribeAircraft,
+  subscribeTracks,
+} from './api'
 
 const realFetch = globalThis.fetch
 
@@ -88,5 +95,41 @@ describe('fetchStats', () => {
 
     expect(calls).toHaveLength(1)
     expect(calls[0].endsWith('/api/stats?window=86400&interval=900&limit=10')).toBe(true)
+  })
+})
+
+describe('subscriptions', () => {
+  const realEventSource = globalThis.EventSource
+  let urls
+
+  beforeEach(() => {
+    urls = []
+    globalThis.EventSource = class {
+      constructor(url) {
+        urls.push(url)
+      }
+      addEventListener() {}
+      close() {}
+    }
+  })
+
+  afterEach(() => {
+    globalThis.EventSource = realEventSource
+  })
+
+  test('subscribeAircraft streams the window at the chosen interval', () => {
+    const close = subscribeAircraft({ maxAgeSeconds: 300, intervalSeconds: 2 }, { onUpdate() {} })
+    expect(urls[0].endsWith('/api/stream/aircraft?max_age=300&interval=2')).toBe(true)
+    expect(typeof close).toBe('function')
+  })
+
+  test("subscribeTracks streams every aircraft for the 'all' scope", () => {
+    subscribeTracks({ scope: 'all', maxAgeSeconds: 300, intervalSeconds: 1 }, { onUpdate() {} })
+    expect(urls[0].endsWith('/api/stream/tracks?scope=all&max_age=300&interval=1')).toBe(true)
+  })
+
+  test('subscribeTracks streams one aircraft for an icao24 scope', () => {
+    subscribeTracks({ scope: 'abc123', maxAgeSeconds: 60, intervalSeconds: 1 }, { onUpdate() {} })
+    expect(urls[0].endsWith('/api/stream/tracks?scope=abc123&max_age=60&interval=1')).toBe(true)
   })
 })

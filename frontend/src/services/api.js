@@ -1,10 +1,11 @@
 /**
- * Data access for the SPA. In demo mode every call is answered by the
- * in-browser simulator instead of the backend.
+ * Data access for the SPA: one-off fetches and live subscriptions. In demo
+ * mode every call is answered by the in-browser simulator instead of the backend.
  */
 
 import { API_URL, DEMO_MODE } from '../constants'
 import { DemoFleet } from './demo'
+import { openStream } from './stream'
 
 const fleet = DEMO_MODE ? new DemoFleet() : null
 
@@ -92,4 +93,65 @@ export async function fetchStats({ window, interval, limit }) {
   if (fleet) return fleet.stats({ window, interval, limit })
   const query = new URLSearchParams({ window, interval, limit })
   return getJson(`/api/stats?${query}`)
+}
+
+/**
+ * Demo stand-in for a stream: produce a payload now and then every interval.
+ *
+ * @param {number} intervalSeconds - Seconds between updates
+ * @param {function(): any} produce - Builds the next payload from the simulator
+ * @param {{onUpdate: function(any): void}} handlers
+ * @returns {function(): void} Stops the updates
+ */
+function simulateStream(intervalSeconds, produce, { onUpdate }) {
+  const emit = () => onUpdate(produce())
+  emit()
+  const timer = setInterval(emit, intervalSeconds * 1000)
+  return () => clearInterval(timer)
+}
+
+/**
+ * Subscribes to the aircraft feed: the /api/all window, resent every interval.
+ *
+ * Every update is the whole list, so replace what is held rather than merge.
+ *
+ * @param {{maxAgeSeconds: number, intervalSeconds: number}} params - Age window and cadence
+ * @param {{onUpdate: function(Array): void, onError?: function(Error): void}} handlers
+ * @returns {function(): void} Unsubscribes
+ */
+export function subscribeAircraft({ maxAgeSeconds, intervalSeconds }, handlers) {
+  if (fleet) {
+    return simulateStream(intervalSeconds, () => fleet.advance(Date.now()).all(), handlers)
+  }
+  const query = new URLSearchParams({ max_age: maxAgeSeconds, interval: intervalSeconds })
+  return openStream(`${API_URL}/api/stream/aircraft?${query}`, handlers)
+}
+
+/**
+ * Subscribes to stored positions: the window first, then only new points each interval.
+ *
+ * Updates are shaped like /api/tracks and append to what is held; the backend
+ * never repeats a point, and a reconnect resumes from the last one delivered.
+ *
+ * @param {{scope: string, maxAgeSeconds: number, intervalSeconds: number}} params -
+ *   `'all'` or an icao24, the age window for the first update, and the cadence
+ * @param {{onUpdate: function(Object): void, onError?: function(Error): void}} handlers
+ * @returns {function(): void} Unsubscribes
+ */
+export function subscribeTracks({ scope, maxAgeSeconds, intervalSeconds }, handlers) {
+  if (fleet) {
+    // Ask from the window, then from the last update; the hook drops repeats.
+    let since = Math.floor(Date.now() / 1000) - maxAgeSeconds
+    return simulateStream(
+      intervalSeconds,
+      () => {
+        const points = scope === 'all' ? fleet.tracks(since) : fleet.track(scope, since)
+        since = Math.floor(Date.now() / 1000)
+        return scope === 'all' || !points.length ? points : { [scope]: points }
+      },
+      handlers
+    )
+  }
+  const query = new URLSearchParams({ scope, max_age: maxAgeSeconds, interval: intervalSeconds })
+  return openStream(`${API_URL}/api/stream/tracks?${query}`, handlers)
 }

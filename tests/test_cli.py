@@ -524,3 +524,40 @@ def test_feed_options_help_lists_metadata_retention(command):
     result = CliRunner().invoke(main, ["start", command, "--help"])
     assert "--metadata-retention" in result.output
     assert "3600" in result.output
+
+
+def test_backend_and_frontend_stop_despite_open_streams(
+    tmp_path, monkeypatch, built_frontend, no_uvicorn
+):
+    """A map tab keeps its event streams open forever; shutdown must not wait for them."""
+    from adsb.cli import GRACEFUL_SHUTDOWN_TIMEOUT, SHUTDOWN_TIMEOUT
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MAPBOX_TOKEN", "pk.local")
+    assert GRACEFUL_SHUTDOWN_TIMEOUT < SHUTDOWN_TIMEOUT
+
+    CliRunner().invoke(main, ["start", "backend", "--db-path", str(tmp_path / "t.db")])
+    assert no_uvicorn["timeout_graceful_shutdown"] == GRACEFUL_SHUTDOWN_TIMEOUT
+
+    CliRunner().invoke(main, ["start", "frontend"])
+    assert no_uvicorn["timeout_graceful_shutdown"] == GRACEFUL_SHUTDOWN_TIMEOUT
+
+
+def test_start_all_servers_stop_despite_open_streams(
+    tmp_path, monkeypatch, built_frontend, fake_servers
+):
+    from adsb.cli import GRACEFUL_SHUTDOWN_TIMEOUT
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MAPBOX_TOKEN", "pk.local")
+    fake_servers.behaviors[8800] = lambda server: None
+    fake_servers.behaviors[3456] = lambda server: None
+
+    # Stubs that return at once read as a crash to the command; the configs are what matter.
+    run_start_all(tmp_path, "--backend-port", "8800", "--frontend-port", "3456")
+
+    assert len(fake_servers.servers) == 2
+    assert all(
+        server.config.timeout_graceful_shutdown == GRACEFUL_SHUTDOWN_TIMEOUT
+        for server in fake_servers.servers
+    )

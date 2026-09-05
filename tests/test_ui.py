@@ -193,3 +193,49 @@ def test_ui_strips_hop_by_hop_headers(static_dir):
     assert response.status_code == 200
     assert response.headers["x-custom"] == "kept"
     assert response.headers.get("transfer-encoding") != "chunked"
+
+
+def test_ui_streams_events_without_buffering_or_timing_out(static_dir, backend, monkeypatch):
+    """The proxy must relay each event as it arrives and never apply the read timeout."""
+    import json
+
+    import adsb.ui
+    from tests.helpers import serve
+
+    monkeypatch.setattr(adsb.ui, "PROXY_TIMEOUT", 0.3)
+    with serve(backend) as backend_url:
+        ui = create_ui_app(backend_url, static_dir=static_dir)
+        with serve(ui) as ui_url, httpx.Client(base_url=ui_url, timeout=5) as client:
+            with client.stream("GET", "/api/stream/tracks?scope=all&max_age=2000000000") as r:
+                assert r.status_code == 200
+                assert r.headers["content-type"].startswith("text/event-stream")
+                assert "content-length" not in r.headers
+                lines = r.iter_lines()
+                events = []
+                for line in lines:
+                    if line.startswith("data:"):
+                        events.append(json.loads(line[5:]))
+                    if len(events) == 2:
+                        break
+    assert [p["timestamp"] for p in events[0]["abc123"]] == [1234567890, 1234567891]
+    assert events[1] == {}
+
+
+def test_ui_forwards_last_event_id_to_the_backend(static_dir):
+    """Resume only works if the browser's Last-Event-ID reaches the backend."""
+    seen = {}
+
+    def respond(request):
+        seen.update(request.headers)
+        return httpx.Response(200, content=b"id: 1\nevent: update\ndata: []\n\n")
+
+    app = create_ui_app(
+        "http://receiver.test:8000",
+        static_dir=static_dir,
+        transport=httpx.MockTransport(respond),
+    )
+    with TestClient(app) as client:
+        response = client.get("/api/stream/aircraft", headers={"Last-Event-ID": "1700000000"})
+    assert response.status_code == 200
+    assert seen["last-event-id"] == "1700000000"
+    assert response.content == b"id: 1\nevent: update\ndata: []\n\n"

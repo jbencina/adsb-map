@@ -52,16 +52,16 @@ function App() {
   // Theme management
   const { themePreference, appliedTheme, setTheme } = useTheme()
 
-  // Fetch aircraft data with polling; the backend filters by age server-side
+  // Live aircraft list from the backend's stream; it filters by age server-side
   const { aircraft, loading, error, lastUpdate } = useAircraftData(refreshInterval, maxAgeMinutes)
 
-  // Re-apply the age filter locally so aircraft drop off between polls
+  // Re-apply the age filter locally so aircraft drop off between updates
   const filteredAircraft = useFilteredAircraft(aircraft, maxAgeMinutes)
 
   // The header counts what the map draws; position-less aircraft are still tracked but invisible
   const onMapCount = useMemo(() => filteredAircraft.filter(hasPosition).length, [filteredAircraft])
 
-  // Track lines from the backend's stored positions, polled only while something draws
+  // Track lines from the backend's stored positions, streamed only while something draws
   // them: the whole fleet for the overview, else just the selected aircraft
   const { tracks, loaded: tracksLoaded } = useAircraftTracks(
     showTracks ? 'all' : selectedIcao24,
@@ -192,8 +192,8 @@ function App() {
                     </span>
                   </div>
                   <span id="refresh-interval-desc" className="sr-only">
-                    How often to fetch new aircraft data, between {REFRESH_INTERVAL_MIN} and{' '}
-                    {REFRESH_INTERVAL_MAX} seconds
+                    How often the backend sends new aircraft data, between {REFRESH_INTERVAL_MIN}{' '}
+                    and {REFRESH_INTERVAL_MAX} seconds
                   </span>
                 </div>
 

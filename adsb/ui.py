@@ -15,7 +15,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from adsb import __version__
@@ -30,7 +30,15 @@ DEFAULT_API_URL = "http://127.0.0.1:8000"
 
 #: Seconds to wait for the backend before answering 504. `/api/all` on a busy
 #: receiver is well under a second; anything longer is a connectivity problem.
+#: Event streams keep this for connecting but have no read timeout: a quiet
+#: stream at a long interval is not a stalled backend.
 PROXY_TIMEOUT = 10.0
+
+#: Backend paths that answer with an endless `text/event-stream`; relayed as
+#: they arrive rather than read to the end. The browser's `Last-Event-ID` is
+#: what lets a resumed stream carry on where it left off, so it goes upstream.
+STREAM_PREFIX = "/api/stream/"
+STREAM_REQUEST_HEADERS = ("accept", "last-event-id")
 
 #: Hop-by-hop headers must not be forwarded by a proxy (RFC 7230 §6.1).
 _HOP_BY_HOP = frozenset(
@@ -97,6 +105,20 @@ def config_js_body(mapbox_token: str, demo: bool = False) -> str:
     return f"window.APP_CONFIG = {json.dumps(config)};"
 
 
+async def relay(upstream: httpx.Response):
+    """
+    Pass an upstream body through chunk by chunk, closing it however the copy ends.
+
+    Once headers have gone to the browser an upstream failure can no longer
+    become a 502; the stream just ends, and the browser reconnects.
+    """
+    try:
+        async for chunk in upstream.aiter_bytes():
+            yield chunk
+    finally:
+        await upstream.aclose()
+
+
 def create_ui_app(
     api_url: str = DEFAULT_API_URL,
     *,
@@ -160,8 +182,22 @@ def create_ui_app(
 
     async def proxy(request: Request, path: str) -> Response:
         client: httpx.AsyncClient = request.app.state.client
+        streaming = path.startswith(STREAM_PREFIX)
+        upstream_request = client.build_request(
+            "GET",
+            path,
+            params=request.query_params.multi_items(),
+            headers=(
+                {k: v for k in STREAM_REQUEST_HEADERS if (v := request.headers.get(k))}
+                if streaming
+                else None
+            ),
+            timeout=(
+                httpx.Timeout(PROXY_TIMEOUT, read=None) if streaming else httpx.USE_CLIENT_DEFAULT
+            ),
+        )
         try:
-            upstream = await client.get(path, params=request.query_params.multi_items())
+            upstream = await client.send(upstream_request, stream=streaming)
         except httpx.TimeoutException:
             logger.warning("Timed out waiting for backend %s%s", api_url, path)
             return JSONResponse(
@@ -172,6 +208,10 @@ def create_ui_app(
             logger.warning("Cannot reach backend %s%s: %s", api_url, path, e)
             return JSONResponse({"detail": f"Cannot reach backend at {api_url}"}, status_code=502)
         headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP}
+        if streaming:
+            return StreamingResponse(
+                relay(upstream), status_code=upstream.status_code, headers=headers
+            )
         return Response(
             content=upstream.content,
             status_code=upstream.status_code,

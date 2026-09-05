@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Live updates over Server-Sent Events instead of polling.** The map now holds one
+  `/api/stream/aircraft` and one `/api/stream/tracks` connection per tab and receives
+  an event per refresh interval: the aircraft list for the age window, and only the
+  positions stored since the last event. A dropped connection reconnects on its own
+  and resumes the track feed from the last position delivered; a backend outage is
+  retried until it returns. The REST endpoints are unchanged for other clients. The
+  UI server relays the streams unbuffered and without its 10 s read timeout.
+
 ### Maintenance
 - Simplify `just` recipes to `bootstrap`, `dev`, `build`, and `clean`; document
   direct CLI and Bun commands for individual services.

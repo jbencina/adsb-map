@@ -259,7 +259,15 @@ interactive OpenAPI documentation is available directly on the backend at
 | `GET /api/tracks?max_age={seconds}&since={timestamp}` | Stored positions in the time window, keyed by ICAO24; `since` overrides `max_age` |
 | `GET /api/sensors` | Receiver serials present in retained reception metadata |
 | `GET /api/stats?window={seconds}&interval={seconds}&limit={n}` | Traffic chart buckets, aircraft-heard count, and window/lifetime rankings |
+| `GET /api/stream/aircraft?max_age={seconds}&interval={seconds}` | Server-sent events: the `/api/all` list for the window, resent every `interval` seconds |
+| `GET /api/stream/tracks?scope=all\|{icao24}&max_age={seconds}&interval={seconds}` | Server-sent events: the `/api/tracks` window first, then only new positions; reconnects resume via `Last-Event-ID` |
 | `GET /api` | API discovery and aircraft database attribution |
+
+The map subscribes to the two `/api/stream/*` feeds rather than polling, so each open
+tab holds one connection per feed and receives an `update` event per interval. The
+stream works from any device that can reach the UI server, the same as the REST
+endpoints. Anything in front of the UI server (nginx, a tunnel) must pass
+`text/event-stream` responses through unbuffered.
 
 `max_age` defaults to the backend's `--stale-timeout` (60 seconds). `since` is a Unix
 timestamp in seconds. `/api/stats` defaults to a 24-hour window, 15-minute intervals,

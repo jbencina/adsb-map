@@ -26,6 +26,12 @@ from adsb.traffic import backfill_traffic
 from adsb.ui import DEFAULT_API_URL, create_ui_app
 
 DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+#: Seconds uvicorn waits for open connections on shutdown before closing them.
+#: The map holds event streams open indefinitely, so without a bound Ctrl-C
+#: would hang until every browser tab closed. Kept under SHUTDOWN_TIMEOUT so
+#: `start all` sees its servers finish before it stops waiting for them.
+GRACEFUL_SHUTDOWN_TIMEOUT = 2
 SHUTDOWN_TIMEOUT = 10  # seconds to let a service finish its own shutdown
 
 
@@ -349,7 +355,14 @@ def backend(
     # uvicorn handles signals and triggers the FastAPI lifespan shutdown.
     click.echo(f"Starting API server on http://{host}:{port}/")
     try:
-        uvicorn.run(app, host=host, port=port, reload=reload, log_config=log_config)
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            reload=reload,
+            log_config=log_config,
+            timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT,
+        )
     finally:
         if reporter:
             reporter.stop()
@@ -427,7 +440,13 @@ def frontend(api_url: str, host: str, port: int, demo: bool):
     """
     app = _build_frontend(api_url, demo=demo)
     click.echo(f"Starting map UI on http://{host}:{port}/")
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="warning",
+        timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT,
+    )
 
 
 def _proxy_url(host: str, port: int) -> str:
@@ -497,12 +516,24 @@ def all_(
 
     servers = {
         "backend": uvicorn.Server(
-            uvicorn.Config(backend_app, host=host, port=backend_port, log_config=log_config)
+            uvicorn.Config(
+                backend_app,
+                host=host,
+                port=backend_port,
+                log_config=log_config,
+                timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT,
+            )
         ),
         # log_config=None: the backend already configured uvicorn's loggers for
         # this process, and a second dictConfig would undo it.
         "frontend": uvicorn.Server(
-            uvicorn.Config(frontend_app, host=host, port=frontend_port, log_config=None)
+            uvicorn.Config(
+                frontend_app,
+                host=host,
+                port=frontend_port,
+                log_config=None,
+                timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT,
+            )
         ),
     }
     ports = {"backend": backend_port, "frontend": frontend_port}

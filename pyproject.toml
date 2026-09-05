@@ -4,7 +4,8 @@ dynamic = ["version"]
 description = "Python library for ADS-B decoding and REST API using pyModeS"
 readme = "README.md"
 requires-python = ">=3.12"
-license = {text = "GPL-3.0-or-later"}
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [
     {name = "John Bencina", email = "jbencina@users.noreply.github.com"}
 ]
@@ -15,11 +16,11 @@ classifiers = [
     "Environment :: Web Environment",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Information Analysis",
@@ -43,15 +44,16 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jbencina/adsb"
-Repository = "https://github.com/jbencina/adsb"
-Issues = "https://github.com/jbencina/adsb/issues"
+Homepage = "https://github.com/jbencina/adsb-map"
+Repository = "https://github.com/jbencina/adsb-map"
+Issues = "https://github.com/jbencina/adsb-map/issues"
+Changelog = "https://github.com/jbencina/adsb-map/blob/main/CHANGELOG.md"
 
 [project.scripts]
 adsb = "adsb.cli:main"
 
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
+requires = ["hatchling>=1.27", "hatch-vcs>=0.5"]
 build-backend = "hatchling.build"
 
 # Version is derived from the latest git tag at build time. Tag `vX.Y.Z` to
@@ -81,18 +83,29 @@ include = [
   "/LICENSE",
   "/CHANGELOG.md",
   "/pyproject.toml",
+  "/frontend",
+  "/scripts",
+  "/justfile",
+  "/pytest.ini",
+  "/tox.ini",
+  "/uv.lock",
+  "/.python-version",
+  "/.bun-version",
 ]
+exclude = ["/frontend/node_modules", "/frontend/dist"]
 
 [dependency-groups]
 dev = [
     "pytest-cov>=7.0.0",
-    "ruff>=0.14.2",
+    "ruff==0.16.6",
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
     "pre-commit>=3.6.0",
     "tox>=4.0.0",
     "tox-uv>=1.0.0",
 ]
+# CI builds and validates distributions with these tools from uv.lock.
+build = ["hatchling>=1.27", "hatch-vcs>=0.5", "twine>=6.2"]
 
 [tool.ruff]
 line-length = 100
@@ -119,6 +132,8 @@ ignore = [
 ]
 
 [tool.ruff.format]
+# Keep formatting scoped to Python; historical plans contain partial code snippets.
+exclude = ["*.md"]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false

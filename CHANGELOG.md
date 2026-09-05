@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Maintenance
+- Refresh Python dependencies while retaining pyModeS 2.x; align Ruff in CI,
+  tox, and pre-commit, and add weekly dependency/action update PRs.
+- Update and pin GitHub Actions, select the actual Python matrix interpreter,
+  and enforce the Python lockfile in CI.
+- Gate publishing on the reusable test/build workflow, validate the bundled UI
+  and installed wheel, and separate build, PyPI, and GitHub Release permissions.
+- Preserve changelog text through a release notes file, fetch VCS history for
+  build versions, modernize license metadata and project URLs, and include
+  frontend rebuild sources and test configuration in the sdist.
+
 ### Fixed
 - **Selecting an aircraft took a second or two to show its track.** With the track
   overview off, a click was still seeding every aircraft's positions from `/api/tracks`

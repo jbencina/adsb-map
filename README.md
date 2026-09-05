@@ -48,10 +48,32 @@ and Mapbox GL, with aircraft state and position history stored locally in SQLite
 
 ## Quickstart
 
-For the current development version, use Python 3.12+,
-[uv](https://docs.astral.sh/uv/getting-started/installation/),
-[just](https://github.com/casey/just#installation), and a
+Both options require Python 3.12+ and a
 [public Mapbox token](https://account.mapbox.com/access-tokens/).
+Replace the feed host and receiver coordinates in the examples with your own.
+
+### Install from PyPI
+
+The published release includes the prebuilt UI, so you only need Python.
+The commands below apply to v0.2.0, which serves the map and API on a single port.
+
+```bash
+pip install adsb-map
+adsb download
+export MAPBOX_TOKEN=pk.your_token_here
+adsb serve --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+```
+
+Open **http://localhost:8000/**. See
+[the v0.2.0 README](https://github.com/jbencina/adsb-map/blob/v0.2.0/README.md)
+for release-specific options. To use the history view and other unreleased features,
+install from source below.
+
+### Install from source
+
+The current development version also requires
+[uv](https://docs.astral.sh/uv/getting-started/installation/)
+and [just](https://github.com/casey/just#installation).
 `just bootstrap` installs Bun if needed; ensure it is on your `PATH` before building.
 
 ```bash
@@ -66,9 +88,8 @@ export MAPBOX_TOKEN=pk.your_token_here
 uv run adsb start all --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 ```
 
-Open **http://localhost:3000/**. Replace the feed host and receiver coordinates with
-your own. The backend listens on port 8000 and the map on port 3000; `start all` runs
-both in one process, bound to `127.0.0.1` by default.
+Open **http://localhost:3000/**. The backend listens on port 8000 and the map on
+port 3000; `start all` runs both in one process, bound to `127.0.0.1` by default.
 
 To try the UI without a receiver, replace the final command with:
 
@@ -80,12 +101,8 @@ You can also set `MAPBOX_TOKEN` in a `.env` file in the directory where you laun
 the frontend. It is a public browser token, served at runtime through `/config.js`;
 you do not need to rebuild the UI when it changes.
 
-**Prefer the published release?** Install it with `pip install adsb-map` and follow
-[the v0.2.0 README](https://github.com/jbencina/adsb-map/blob/v0.2.0/README.md).
-The published wheel includes the UI and needs only Python.
-
-The examples below use `adsb` directly. In a source checkout, prefix each command
-with `uv run`, as above.
+The remaining examples describe the current development version and use `adsb`
+directly. In a source checkout, prefix each command with `uv run`, as above.
 
 ## Using the map
 

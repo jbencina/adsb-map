@@ -1,45 +1,49 @@
 /**
- * Custom hook that holds every aircraft's track line, fed from /api/tracks
+ * Custom hook that holds the map's track lines, fed from the stored positions
  */
 
 import { useEffect, useState } from 'react'
-import { fetchAircraftTracks } from '../services/api'
+import { fetchTracks } from '../services/api'
 import { mergeTracks, newestTimestamp } from '../tracks'
 
 /**
- * Track lines for the map, one per aircraft, from the positions the backend stores.
+ * Track lines for the map from the positions the backend stores.
  *
- * While enabled it seeds every line from the age window, then polls for new
- * positions since the newest one it holds. Nothing is sampled or thinned in the
- * browser, so the overview lines and the selected aircraft's line are the same
- * data. Widening the window reseeds; narrowing it prunes.
+ * The scope is `'all'` while the overview is shown, so one bulk fetch feeds
+ * every line and the selected aircraft's highlight alike; with the overview
+ * off it is just the selected icao24, so a click pulls one aircraft's positions
+ * rather than the fleet's. Either way it seeds from the age window, then polls
+ * for new positions since the newest one it holds. Nothing is sampled or
+ * thinned in the browser. Widening the window reseeds; narrowing it prunes.
  *
- * @param {boolean} enabled - Poll only while lines are shown or an aircraft is selected
+ * @param {string|null} scope - `'all'`, an icao24, or null to hold nothing
  * @param {number} refreshInterval - Poll interval in seconds
  * @param {number} maxAgeMinutes - Window to seed from and prune to
  * @returns {{tracks: Object, loaded: boolean}} icao24 to [lon, lat, timestamp] points,
- *   and whether the first fetch since enabling has completed
+ *   and whether the first fetch for this scope has completed
  */
-export function useAircraftTracks(enabled, refreshInterval, maxAgeMinutes) {
+export function useAircraftTracks(scope, refreshInterval, maxAgeMinutes) {
   const [tracks, setTracks] = useState({})
   const [loaded, setLoaded] = useState(false)
 
+  // A new scope starts from scratch so another aircraft's line never shows; a
+  // window or interval change keeps the lines up until the reseed replaces them
   useEffect(() => {
-    if (!enabled) {
-      setTracks({})
-      setLoaded(false)
-      return undefined
-    }
+    setTracks({})
+    setLoaded(false)
+  }, [scope])
+
+  useEffect(() => {
+    if (!scope) return undefined
     let cancelled = false
     let held = {}
-    // The first poll after enabling (or a window change) starts from scratch
     let seeded = false
 
     const poll = async () => {
       const cutoff = Math.floor(Date.now() / 1000) - maxAgeMinutes * 60
       const since = seeded ? (newestTimestamp(held) ?? cutoff) : cutoff
       try {
-        const fresh = await fetchAircraftTracks(Math.max(since, cutoff))
+        const fresh = await fetchTracks(scope, Math.max(since, cutoff))
         if (cancelled) return
         held = mergeTracks(seeded ? held : {}, fresh, cutoff)
         seeded = true
@@ -56,7 +60,7 @@ export function useAircraftTracks(enabled, refreshInterval, maxAgeMinutes) {
       cancelled = true
       clearInterval(interval)
     }
-  }, [enabled, refreshInterval, maxAgeMinutes])
+  }, [scope, refreshInterval, maxAgeMinutes])
 
   return { tracks, loaded }
 }

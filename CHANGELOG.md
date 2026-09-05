@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Selecting an aircraft took a second or two to show its track.** With the track
+  overview off, a click was still seeding every aircraft's positions from `/api/tracks`
+  (2.5 MB, 25k points on a busy receiver) just to draw one line. It now asks
+  `/api/track` for the selected aircraft alone, a few kilobytes, and only the overview
+  uses the bulk fetch; with the overview on, the selected line still comes from that
+  same data with no second request.
 - **Aircraft markers spun in place on some heading changes** (#14). The marker's
   rotation is CSS-animated from the raw track, so a report crossing north (359° to 1°)
   played as a 358° turn the long way round. Each marker now keeps a continuous heading

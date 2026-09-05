@@ -61,9 +61,10 @@ function App() {
   // The header counts what the map draws; position-less aircraft are still tracked but invisible
   const onMapCount = useMemo(() => filteredAircraft.filter(hasPosition).length, [filteredAircraft])
 
-  // Track lines from the backend's stored positions, polled only while something draws them
+  // Track lines from the backend's stored positions, polled only while something draws
+  // them: the whole fleet for the overview, else just the selected aircraft
   const { tracks, loaded: tracksLoaded } = useAircraftTracks(
-    showTracks || selectedIcao24 !== null,
+    showTracks ? 'all' : selectedIcao24,
     refreshInterval,
     maxAgeMinutes
   )

@@ -48,6 +48,39 @@ export async function fetchAircraftTracks(sinceSeconds) {
 }
 
 /**
+ * Fetches the stored positions of one aircraft since a timestamp
+ *
+ * Same positions as `fetchAircraftTracks`, keyed the same way, so the map can
+ * hold a single line without pulling the whole fleet's when the overview is off.
+ *
+ * @param {string} icao24 - ICAO 24-bit address
+ * @param {number} sinceSeconds - Unix timestamp; only positions at or after it
+ * @returns {Promise<Object>} icao24 to array of position objects, or empty with none
+ * @throws {Error} If the API request fails
+ */
+export async function fetchAircraftTrack(icao24, sinceSeconds) {
+  const points = fleet
+    ? fleet.track(icao24, sinceSeconds)
+    : await getJson(
+        `/api/track?icao24=${encodeURIComponent(icao24)}&since=${encodeURIComponent(sinceSeconds)}`
+      )
+  return points.length ? { [icao24]: points } : {}
+}
+
+/**
+ * Fetches track positions for a scope: every aircraft, or just one
+ *
+ * @param {string} scope - `'all'` for the fleet, otherwise an icao24
+ * @param {number} sinceSeconds - Unix timestamp; only positions at or after it
+ * @returns {Promise<Object>} icao24 to array of position objects
+ */
+export function fetchTracks(scope, sinceSeconds) {
+  return scope === 'all'
+    ? fetchAircraftTracks(sinceSeconds)
+    : fetchAircraftTrack(scope, sinceSeconds)
+}
+
+/**
  * Fetches the traffic history behind the history view
  *
  * @param {{window: number, interval: number, limit: number}} params - Seconds of

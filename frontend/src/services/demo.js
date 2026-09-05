@@ -167,6 +167,12 @@ export class DemoFleet {
     return out
   }
 
+  /** One aircraft's trajectory since a timestamp, shaped like /api/track. */
+  track(icao24, sinceSeconds = 0) {
+    const entry = this.entries.find(e => e.ac.icao24 === icao24)
+    return entry ? entry.history.filter(p => p.timestamp >= sinceSeconds) : []
+  }
+
   /**
    * A day of plausible traffic, shaped like /api/stats: quiet overnight, busy
    * in the afternoon, with per-bucket noise seeded by the bucket start so the

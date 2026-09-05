@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Maintenance
+- Simplify `just` recipes to `bootstrap`, `dev`, `build`, and `clean`; document
+  direct CLI and Bun commands for individual services.
+- Refresh the README with current map and history screenshots, feature coverage,
+  release-aware setup instructions, and corrected track and retention behavior.
+  Move contributor and release details into `docs/development.md`.
 - Refresh Python dependencies while retaining pyModeS 2.x; align Ruff in CI,
   tox, and pre-commit, and add weekly dependency/action update PRs.
 - Update and pin GitHub Actions, select the actual Python matrix interpreter,
@@ -78,9 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decoder's commits. Expect `adsb.db-wal` and `adsb.db-shm` next to the database.
 
 ### Changed
-- The map only polls `/api/tracks` while "Show tracks" is on or an aircraft is
-  selected, and the detail card's Track row explains that the angle is the reported
-  ground track rather than something derived from the line (#16).
+- The map polls `/api/tracks` while "Show tracks" is on and `/api/track` for a
+  selected aircraft when the overview is off. The detail card's Track row explains
+  that the angle is the reported ground track rather than something derived from
+  the line (#16, #23).
 - **The backend no longer purges stale aircraft.** Previously anything not seen within
   `--stale-timeout` was deleted every 30 seconds, taking its positions and reception
   metadata with it, so the map's "max age" slider could never reach past the last minute
@@ -111,7 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step. `adsb start frontend` now refuses to start with an explanatory error.
 
 ### Added
-- **Demo mode.** `adsb start frontend --demo` (or `bun run dev:demo` / `just dev-demo`
+- **Demo mode.** `adsb start frontend --demo` (or `bun run dev:demo`
   for the Vite dev server) shows a simulated fleet with track history and no backend
   running. The simulation lives in the browser behind the SPA's data layer, so it
   exercises the real map, polling, filtering, and track code paths. The header shows a
@@ -124,9 +130,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     stays same-origin and the backend needs no CORS configuration. It serves `/config.js`
     from its own `MAPBOX_TOKEN`, so the token lives with the UI. A backend that is down
     surfaces as a 502/504 JSON error.
-  - `ADSB_API_URL=http://receiver:8000 bun run dev` (or `just dev-frontend URL`) points
-    the Vite dev/preview proxy at a remote backend; Vite serves its own `/config.js` from
-    `VITE_MAPBOX_TOKEN`. New `just backend`, `just frontend`, `just dev-frontend` recipes.
+  - `ADSB_API_URL=http://receiver:8000 bun run dev` points the Vite dev/preview proxy
+    at a remote backend; Vite serves its own `/config.js` from `MAPBOX_TOKEN` in the
+    repo-root `.env`, with `VITE_MAPBOX_TOKEN` retained as a fallback.
 - Startup checks for the conditions that otherwise fail silently: `adsb start backend`
   reports the aircraft database and data source; `adsb start frontend` reports
   `MAPBOX_TOKEN`.
@@ -147,7 +153,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Breaking:** `adsb serve` is replaced by `adsb start backend` + `adsb start frontend`.
   The backend no longer serves the map at `/` or `/config.js`; visit the frontend's port
-  (3000 by default) instead. `just serve` → `just backend`.
+  (3000 by default) instead. In a source checkout, replace `just serve` with
+  `uv run adsb start backend` and `uv run adsb start frontend`, or `uv run adsb start all`.
 - `adsb download` streams the gzip straight to CSV via a `.partial` temp file, so no
   `aircraft.csv.gz` is left on disk and a failed download cannot leave a truncated CSV
   where the loader would read it.

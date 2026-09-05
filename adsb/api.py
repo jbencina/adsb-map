@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, select
 from sqlalchemy.orm import Session, aliased
 
 from adsb import __version__
@@ -23,7 +23,7 @@ from adsb.schemas import (
     TopAircraftSchema,
     TrackPointSchema,
 )
-from adsb.stream import MEDIA_TYPE, SSE_HEADERS, parse_event_id, updates
+from adsb.stream import MEDIA_TYPE, SSE_HEADERS, updates
 from adsb.traffic import (
     aircraft_seen_stmt,
     buckets_stmt,
@@ -289,56 +289,99 @@ def track_points(
     return _group_points((icao24.lower(), pos) for pos in positions)
 
 
-def newest_position_id(session: Session) -> int:
-    """Id of the last stored position, or 0 with none; the tracks stream's starting cursor."""
-    return session.execute(select(func.max(AircraftPosition.id))).scalar() or 0
+#: The tracks stream's cursor: the id and timestamp of the newest position sent.
+TrackCursor = tuple[int, int]
+
+
+def encode_track_cursor(cursor: TrackCursor) -> str:
+    """``id:timestamp`` as sent in the SSE ``id`` field."""
+    return f"{cursor[0]}:{cursor[1]}"
+
+
+def parse_track_cursor(value: str | None) -> TrackCursor | None:
+    """A ``Last-Event-ID`` back into a cursor, or None when absent or not one of ours."""
+    if not value:
+        return None
+    try:
+        row_id, stamp = value.split(":")
+        return int(row_id), int(stamp)
+    except ValueError:
+        return None
+
+
+def newest_position(session: Session) -> TrackCursor:
+    """Id and timestamp of the last stored position, or ``(0, 0)`` with none."""
+    row = session.execute(
+        select(AircraftPosition.id, AircraftPosition.timestamp)
+        .order_by(AircraftPosition.id.desc())
+        .limit(1)
+    ).first()
+    return (row.id, row.timestamp) if row else (0, 0)
+
+
+def cursor_is_current(session: Session, cursor: TrackCursor) -> bool:
+    """
+    Whether the cursor's row is still there with the timestamp it had.
+
+    Positions have no AUTOINCREMENT, so once ``adsb cleanup`` deletes the
+    newest rows SQLite hands their ids out again, and "everything after id N"
+    would silently skip the reused ones. A cursor row that is gone or carries a
+    different timestamp means the table changed underneath the stream. ``(0, 0)``
+    was an empty table and has nothing to have been reused.
+    """
+    row_id, stamp = cursor
+    if row_id == 0:
+        return True
+    found = session.execute(
+        select(AircraftPosition.timestamp).where(AircraftPosition.id == row_id)
+    ).scalar()
+    return found == stamp
 
 
 def track_points_after(
-    session: Session, last_id: int, icao24: str | None = None
-) -> tuple[dict[str, list[TrackPointSchema]], int]:
+    session: Session, cursor: TrackCursor, icao24: str | None = None
+) -> tuple[dict[str, list[TrackPointSchema]], TrackCursor]:
     """
-    Positions stored after row ``last_id`` and the new cursor, for the tracks stream.
+    Positions stored after the cursor's row and the new cursor, for the tracks stream.
 
     Returns
     -------
     tuple
-        Points keyed by icao24, and the highest id among them (``last_id`` if none)
+        Points keyed by icao24, and the newest row among them (``cursor`` if none)
     """
     aircraft_id = None
     if icao24 is not None:
         aircraft_id = _aircraft_id(session, icao24)
         if aircraft_id is None:
-            return {}, last_id
-    rows = session.execute(positions_after_stmt(last_id, aircraft_id)).all()
-    cursor = max((pos.id for _, pos in rows), default=last_id)
-    return _group_points(rows), cursor
+            return {}, cursor
+    rows = session.execute(positions_after_stmt(cursor[0], aircraft_id)).all()
+    newest = max(((pos.id, pos.timestamp) for _, pos in rows), default=cursor)
+    return _group_points(rows), newest
 
 
 def tracks_update(
-    session: Session, cursor: int | None, cutoff: int, icao24: str | None = None
-) -> tuple[dict[str, list[TrackPointSchema]], int]:
+    session: Session, cursor: str | None, cutoff: int, icao24: str | None = None
+) -> tuple[dict[str, list[TrackPointSchema]], str]:
     """
     One event's worth of the tracks stream: positions to send and the cursor to send them with.
 
-    With no cursor the event is the window snapshot. The cursor is read before
-    the snapshot rather than after: the driver runs each SELECT in its own
-    implicit transaction, so a position committed between the two reads then
-    shows up in the snapshot *and* again next tick, instead of falling past the
-    cursor and never being sent. The client drops the repeat.
+    With no usable cursor the event is the window snapshot. The cursor is read
+    before the snapshot rather than after: the driver runs each SELECT in its
+    own implicit transaction, so a position committed between the two reads
+    then shows up in the snapshot *and* again next tick, instead of falling
+    past the cursor and never being sent. The client drops the repeat.
 
-    A cursor ahead of the table means the table was emptied and row ids are
-    being reused (``adsb cleanup``, or a rebuilt database); the stream starts
-    over from the window rather than waiting for ids to catch up. Known limit:
-    a table emptied and refilled past the old cursor within one tick is not
-    told apart from normal growth, which takes a near-empty database.
+    A cursor whose row has changed (see ``cursor_is_current``) starts the
+    stream over from the window rather than skipping reused ids.
     """
-    if cursor is not None and cursor > newest_position_id(session):
-        cursor = None
-    if cursor is None:
-        cursor = newest_position_id(session)
-        return track_points(session, cutoff, icao24), cursor
-    return track_points_after(session, cursor, icao24)
+    parsed = parse_track_cursor(cursor)
+    if parsed is not None and not cursor_is_current(session, parsed):
+        parsed = None
+    if parsed is None:
+        parsed = newest_position(session)
+        return track_points(session, cutoff, icao24), encode_track_cursor(parsed)
+    points, newest = track_points_after(session, parsed, icao24)
+    return points, encode_track_cursor(newest)
 
 
 def create_app(
@@ -547,10 +590,10 @@ def create_app(
         time and is not a resume cursor: a reconnect just gets the window again.
         """
 
-        def load(_cursor: int | None) -> tuple[list[dict], int]:
+        def load(_cursor: str | None) -> tuple[list[dict], str]:
             with get_db().get_session() as session:
                 states = aircraft_states(session, seen_since(max_age))
-            return [a.model_dump() for a in states], int(time.time())
+            return [a.model_dump() for a in states], str(int(time.time()))
 
         return event_stream(load, None, interval)
 
@@ -569,19 +612,19 @@ def create_app(
         Server-sent events: ``/api/tracks`` for the window, then only new positions.
 
         Each ``update`` event is a JSON object shaped like ``/api/tracks``; append
-        its points to the lines held. The event id is the newest position row
+        its points to the lines held. The event id names the newest position row
         sent, so a reconnect with ``Last-Event-ID`` resumes exactly after it.
         An aircraft not heard yet is simply absent until it appears, so
         selecting one before its first position is not an error.
         """
         icao24 = None if scope == "all" else scope.lower()
 
-        def load(cursor: int | None) -> tuple[dict[str, list[dict]], int]:
+        def load(cursor: str | None) -> tuple[dict[str, list[dict]], str]:
             with get_db().get_session() as session:
                 points, cursor = tracks_update(session, cursor, seen_since(max_age), icao24)
             return {k: [p.model_dump() for p in v] for k, v in points.items()}, cursor
 
-        return event_stream(load, parse_event_id(request.headers.get("last-event-id")), interval)
+        return event_stream(load, request.headers.get("last-event-id"), interval)
 
     @app.get("/api/sensors", response_model=list[SensorSchema])
     async def get_sensors(session: Session = Depends(get_session)):

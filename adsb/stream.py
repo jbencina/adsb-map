@@ -23,25 +23,15 @@ SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 MEDIA_TYPE = "text/event-stream"
 
 
-def sse_event(payload, event_id: int) -> bytes:
+def sse_event(payload, event_id: str | int) -> bytes:
     """One ``update`` event carrying ``payload`` as JSON, tagged with ``event_id``."""
     return f"id: {event_id}\nevent: update\ndata: {json.dumps(payload)}\n\n".encode()
 
 
-def parse_event_id(last_event_id: str | None) -> int | None:
-    """The browser's ``Last-Event-ID`` as an int, or None when absent or not ours."""
-    if last_event_id is None:
-        return None
-    try:
-        return int(last_event_id)
-    except ValueError:
-        return None
-
-
 async def updates(
-    load: Callable[[int | None], tuple[object, int]],
+    load: Callable[[str | None], tuple[object, str]],
     *,
-    cursor: int | None,
+    cursor: str | None,
     interval: float,
     max_events: int | None = None,
 ) -> AsyncIterator[bytes]:
@@ -50,7 +40,9 @@ async def updates(
 
     ``load`` takes the cursor from the previous event (None for the first, which
     is the snapshot) and returns the payload plus the cursor to send as the
-    event id. It does blocking database work and runs in a worker thread.
+    event id. The cursor is an opaque string to this loop; a feed that can
+    resume gives it meaning. ``load`` does blocking database work and runs in
+    a worker thread.
     Starlette cancels this generator when the client goes away, so nothing here
     watches for disconnects. An event goes out even when nothing changed, so a
     quiet feed is distinguishable from a dead connection.
@@ -59,7 +51,7 @@ async def updates(
     ----------
     load : callable
         ``cursor -> (payload, next_cursor)``; the payload must be JSON-serialisable
-    cursor : int, optional
+    cursor : str, optional
         Where to start: None for a fresh snapshot, else a resumed event id
     interval : float
         Seconds between ticks

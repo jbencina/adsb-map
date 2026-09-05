@@ -1,374 +1,311 @@
-# ADS-B Decoder and REST API
+# adsb-map
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+**Live aircraft tracking, traffic history, and a REST API for your ADS-B receiver.**
+
 [![PyPI version](https://img.shields.io/pypi/v/adsb-map.svg)](https://pypi.org/project/adsb-map/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![CI](https://github.com/jbencina/adsb-map/actions/workflows/ci.yml/badge.svg)](https://github.com/jbencina/adsb-map/actions/workflows/ci.yml)
-[![Publish](https://github.com/jbencina/adsb-map/actions/workflows/publish.yml/badge.svg)](https://github.com/jbencina/adsb-map/actions/workflows/publish.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://github.com/jbencina/adsb-map/blob/main/LICENSE)
 
-ADS-B decoder and REST API server using [pyModeS](https://github.com/junzis/pyModeS) for
-decoding Mode-S and ADS-B messages. Mirrors the [jet1090](https://github.com/xoolive/rs1090/)
-REST API interface with a Python-based implementation, plus an interactive map that runs as
-a separate service — on the same machine or anywhere that can reach the API.
+Connect to a dump1090, readsb, or compatible TCP feed to follow aircraft on an
+interactive map, inspect flight and reception details, and explore the last 24 hours
+of traffic. Built with [pyModeS](https://github.com/junzis/pyModeS), FastAPI, React,
+and Mapbox GL, with aircraft state and position history stored locally in SQLite.
 
-![Map interface demo](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/map.png)
+[Quickstart](#quickstart) · [Features](#features) · [History](#traffic-history) ·
+[Configuration](#configuration) · [API](#api-endpoints) ·
+[Development](#develop-from-source) · [Changelog](https://github.com/jbencina/adsb-map/blob/main/CHANGELOG.md)
 
-## Quickstart
+![Aircraft map with callsign labels, signal-colored markers, a selected track, and flight details](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/screenshots/map-light.png)
 
-Two services: the **backend** (decoder + REST API) and the **frontend** (map UI). The
-published wheel contains both, including the prebuilt React UI, so you only need Python —
-no Node, no bun, no Docker.
+*Map in light mode, using simulated traffic. [View dark mode](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/screenshots/map-dark.png).*
 
-```bash
-pip install adsb-map
-adsb download                                # one-time: aircraft database (~30MB)
-
-# Terminal 1 — on the machine attached to the receiver:
-adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
-
-# Terminal 2 — wherever you want to look at the map (same machine, or a laptop):
-# Free Mapbox token: https://account.mapbox.com/access-tokens/
-# Export it, or put it in a `.env` file in the directory you run this from.
-export MAPBOX_TOKEN=pk.your_token_here
-adsb start frontend                          # add --api-url http://receiver:8000 if remote
-
-# Or run both in one command:
-adsb start all --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
-```
-
-Visit http://localhost:3000/. Aircraft show up as markers; click one for its track.
-
-The frontend proxies `/api/*` to the backend, so the browser only ever talks to the
-frontend process: no CORS, no per-machine build, and the Mapbox token stays with the UI.
-See [Running on separate machines](#running-on-separate-machines).
+> **Release status:** This README describes the current development version on `main`.
+> The latest release, [v0.2.0](https://github.com/jbencina/adsb-map/releases/tag/v0.2.0),
+> uses `adsb serve` and predates the history view and `adsb start` commands below.
+> Install from source to use these features before the next release.
 
 ## Features
 
-- **pyModeS decoding** — DF4/5/17/18/20/21 message types with CPR position decoding
-- **Aircraft enrichment** — automatic registration / type / description lookup from
-  the [Mictronics aircraft database](https://www.mictronics.de/aircraft-database/)
-  (566k+ records, ODC-By), fetched via [tar1090-db](https://github.com/wiedehopf/tar1090-db);
-  see [Aircraft database attribution](#aircraft-database-attribution)
-- **REST API** — FastAPI endpoints under `/api/*`, jet1090-compatible
-- **SQLite storage** — aircraft state, position history, reception metadata; nothing is
-  purged while running, so the file doubles as a log for offline analysis
-- **Interactive map** — React + Mapbox GL, prebuilt and shipped in the wheel; signal-strength
-  indicator per aircraft and an optional shade-by-signal view of the markers
-- **Separate services** — backend on the receiver, frontend on any machine that can reach it
-- **Network data sources** — connects to dump1090 / readsb / modesdeco2 over TCP (Beast or raw)
+- **Live map and flight details.** Callsign labels, individual and fleet-wide tracks,
+  altitude, speed, vertical rate, squawk, registration, and aircraft type.
+- **24-hour traffic history.** Message-volume and aircraft-activity charts, with
+  5-minute, 15-minute, or hourly intervals and top-aircraft rankings.
+- **Reception visibility.** Per-aircraft RSSI indicators and optional marker coloring
+  by signal strength when using a Beast feed.
+- **Light and dark themes.** Follow the system theme or choose one manually, with
+  responsive controls for desktop and mobile.
+- **Persistent local data.** Retain aircraft and positions for later queries and
+  offline analysis; reception metadata and traffic aggregates use rolling retention.
+- **Flexible deployment.** Run the decoder and map together, or keep the backend on
+  the receiver and serve the frontend from another machine. Published wheels include
+  the prebuilt UI.
+- **REST API.** Read aircraft state, trajectories, receiver information, and traffic
+  statistics from FastAPI endpoints modeled on the
+  [jet1090 API](https://github.com/xoolive/rs1090/).
+- **Demo mode.** Explore the map and history with simulated traffic, without a receiver
+  or backend. A Mapbox token is still required for the base map.
+
+## Quickstart
+
+For the current development version, use Python 3.12+,
+[uv](https://docs.astral.sh/uv/getting-started/installation/),
+[just](https://github.com/casey/just#installation), and a
+[public Mapbox token](https://account.mapbox.com/access-tokens/).
+`just bootstrap` installs Bun if needed; ensure it is on your `PATH` before building.
+
+```bash
+git clone https://github.com/jbencina/adsb-map.git
+cd adsb-map
+uv sync --locked
+just bootstrap
+just build
+
+uv run adsb download
+export MAPBOX_TOKEN=pk.your_token_here
+uv run adsb start all --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+```
+
+Open **http://localhost:3000/**. Replace the feed host and receiver coordinates with
+your own. The backend listens on port 8000 and the map on port 3000; `start all` runs
+both in one process, bound to `127.0.0.1` by default.
+
+To try the UI without a receiver, replace the final command with:
+
+```bash
+uv run adsb start frontend --demo
+```
+
+You can also set `MAPBOX_TOKEN` in a `.env` file in the directory where you launch
+the frontend. It is a public browser token, served at runtime through `/config.js`;
+you do not need to rebuild the UI when it changes.
+
+**Prefer the published release?** Install it with `pip install adsb-map` and follow
+[the v0.2.0 README](https://github.com/jbencina/adsb-map/blob/v0.2.0/README.md).
+The published wheel includes the UI and needs only Python.
+
+The examples below use `adsb` directly. In a source checkout, prefix each command
+with `uv run`, as above.
+
+## Using the map
+
+Click an aircraft to view its flight details, reception signal, and stored track.
+The header count includes aircraft with a position that can be drawn on the map.
+
+Open **Settings** to choose:
+
+| Control | Behavior |
+| --- | --- |
+| Refresh interval | Poll every 1–60 seconds; default 1 second |
+| Max age | Show aircraft heard within the last 1–60 minutes; default 5 minutes |
+| Show callsigns | Toggle labels beside aircraft markers |
+| Shade by signal | Color markers by reception strength |
+| Show tracks | Display stored tracks for all visible aircraft |
+| Theme | Auto, light, or dark |
+
+### Track lines on the map
+
+Tracks use positions stored by the backend and follow the map's **Max age** window.
+Selecting an aircraft fetches only its track through `/api/track`. With **Show tracks**
+enabled, `/api/tracks` supplies all tracks, including the selected highlight. Both
+modes fetch new positions incrementally and poll only while tracks are displayed.
+
+The marker heading and the detail card's **Track** angle come from the aircraft's
+reported ground track. They may differ slightly from the line joining its recorded
+positions. Heading changes animate through the shortest turn, including across north.
+
+## Traffic history
+
+Open the **clock button** beside Settings to see the last 24 hours of traffic.
+The map continues updating underneath; press **Escape** or the close button to return.
+
+![Traffic history with message-volume and peak-aircraft charts and both top-ten aircraft tables](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/screenshots/history-light.png)
+
+*History in light mode, using simulated traffic. [View dark mode](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/screenshots/history-dark.png).*
+
+- **Summary:** total messages, peak aircraft heard in one minute, and aircraft heard
+  across the history window.
+- **Charts:** message volume and peak aircraft per interval; choose 5 minutes,
+  15 minutes, or 1 hour. The aircraft chart shows the highest one-minute count in each
+  interval, and the current interval is partial.
+- **Rankings:** the top 10 aircraft by messages in the last 24 hours and by lifetime
+  message count for aircraft retained in the database.
+
+History refreshes at the start of each minute. Traffic aggregates are retained for
+seven days, independently of reception metadata. On upgrade, existing databases seed
+history from whatever reception metadata is still available; older, deleted metadata
+cannot be reconstructed. Window rankings and the aircraft-heard total use hourly
+aggregates, so their starting boundary rounds down to the hour.
 
 ## Configuration
 
-Everything is a CLI argument except the Mapbox token. `.env` is for secrets only.
+Configure services with CLI arguments and the frontend token with `MAPBOX_TOKEN`.
+Run `adsb start all --help`, `adsb start backend --help`, or
+`adsb start frontend --help` for the complete option list.
 
-| Setting | Default | How to override |
-|---|---|---|
-| **Backend** | | |
-| Bind host / port | `0.0.0.0` / `8000` | `adsb start backend --host --port` |
-| Database path | `./adsb.db` | `adsb start backend --db-path` |
-| Stale timeout (default API window) | `60s` | `adsb start backend --stale-timeout` |
-| Receiver lat/lon | (none) | `adsb start backend --lat --lon` (recommended) |
-| Aircraft database | per-user data dir | `--aircraft-db PATH` on `start backend`, `download`, `decode` |
-| Status line interval | `10s` | `adsb start backend --stats-interval` (`0` disables) |
-| Reception metadata retention | `3600s` | `adsb start backend --metadata-retention` (`0` keeps everything) |
-| HTTP access log | off | `adsb start backend --access-log` |
-| **Frontend** | | |
-| Backend URL | `http://127.0.0.1:8000` | `adsb start frontend --api-url` |
-| Bind host / port | `127.0.0.1` / `3000` | `adsb start frontend --host --port` (`--host 0.0.0.0` to share on the LAN) |
-| Mapbox token | (required) | `MAPBOX_TOKEN` env var, or `.env` file in CWD |
-| Demo mode | off | `adsb start frontend --demo` (simulated aircraft, no backend) |
+### Backend and combined service
 
-`adsb download` writes the aircraft database to a per-user data directory
-(`~/.local/share/adsb-map/aircraft.csv` on Linux) rather than the working directory, so
-`adsb start backend` finds it no matter where you launch it from. Pass the same `--aircraft-db`
-to both if you relocate it. `adsb start backend` prints a startup check confirming whether it was
-found.
+These options apply to both `start backend` and `start all`, except where noted.
 
-`--lat` and `--lon` are strongly recommended: ADS-B position messages use Compact Position
-Reporting (CPR), which decodes faster and more accurately when given a reference position
-within ~180 NM of the receiver.
+| Setting | Default | Option |
+| --- | --- | --- |
+| Bind address | Backend: `0.0.0.0`; all: `127.0.0.1` | `--host HOST` |
+| Backend port | `8000` | Backend: `--port PORT`; all: `--backend-port PORT` |
+| Frontend port | `3000` | All: `--frontend-port PORT` |
+| SQLite database | `./adsb.db` | `--db-path PATH` |
+| Receiver coordinates | Unset | `--lat LAT --lon LON` |
+| Aircraft database | Per-user data directory | `--aircraft-db PATH` |
+| Default API age window | `60` seconds | `--stale-timeout SECONDS` |
+| Reception metadata retention | `3600` seconds | `--metadata-retention SECONDS`; `0` retains all metadata |
+| Feed status interval | `10` seconds | `--stats-interval SECONDS`; `0` disables |
+| HTTP access logging | Off | `--access-log` |
 
-While running, the backend prints a status line every `--stats-interval` seconds so you
-can tell at a glance whether the feed is alive and what it is decoding:
+Supply receiver coordinates to support reference-based CPR position decoding.
+`--stale-timeout` sets the default API window and determines when a returning aircraft
+is treated as a new contact. The map sends its own age window; neither setting deletes
+aircraft or position history.
 
-```
-2026-09-02 19:05:10 - [STATUS] feed localhost:30005 (beast) | last msg <1s ago | 10s: 1,842 msgs (184/s), 131 pos, 27 ac | tracking 31 ac (24 w/ pos) | total 96,210 msgs, 7,455 pos, 142 ac
-```
+`adsb download` stores the enrichment database in a per-user directory, such as
+`~/.local/share/adsb-map/aircraft.csv` on Linux. It skips an existing download unless
+you pass `--force`. If you choose a custom `--aircraft-db`, use the same path for
+`download` and the backend. The option is also available on `decode`.
 
-`last msg … (feed stalled?)` appears when nothing has arrived for over 30 seconds, and
-`no data yet` until the first message. Per-request HTTP logging is off by default because
-the map polls `/api/all` every second; `--access-log` turns it back on.
+The backend prints periodic feed status, including message rate, position updates,
+aircraft counts, and time since the last message. It flags a feed with no messages
+for more than 30 seconds as potentially stalled.
 
-## CLI
+### Standalone frontend
 
-```bash
-adsb start backend …    # decoder + REST API
-adsb start frontend …   # map UI, proxying to a backend (--api-url URL, or --demo for simulated traffic)
-adsb download           # download tar1090-db aircraft database (--force to refresh)
-adsb init-db            # create SQLite tables
-adsb decode HEX         # decode a single message and store it
-adsb cleanup            # purge aircraft not seen in --stale-timeout (manual; never automatic)
-adsb db-size            # show DB file size and row counts
-```
-
-Pass `--help` to any command for the full set of options.
-
-## API endpoints
-
-All JSON endpoints live under `/api/` on the backend. The frontend exposes the same
-paths (proxied) plus the map itself.
-
-| Endpoint | Returns |
-|---|---|
-| `GET /api/all?max_age={seconds}` | Aircraft state vectors seen within `max_age` (default: `--stale-timeout`) |
-| `GET /api/icao24?max_age={seconds}` | ICAO24 addresses seen within `max_age` (default: `--stale-timeout`) |
-| `GET /api/track?icao24={icao24}&since={ts}` | Trajectory for one aircraft |
-| `GET /api/tracks?max_age={seconds}&since={ts}` | Trajectories of every aircraft in the window, keyed by ICAO24; `since` overrides the window for incremental polling |
-| `GET /api/sensors` | Receiver/sensor serials heard within `--metadata-retention` |
-| `GET /api/stats?window={seconds}&interval={seconds}&limit={n}` | Traffic history: messages and peak aircraft per interval (default 24 h in 15-min buckets), plus top aircraft by messages in the window and over their lifetime |
-| `GET /api` | API discovery (welcome JSON) |
-| `GET /docs` | Interactive OpenAPI docs (backend) |
-| `GET /` | Backend: same discovery JSON as `/api`. Frontend: the map |
-| `GET /config.js` | Runtime config shim exposing `MAPBOX_TOKEN` to the SPA (frontend only) |
-
-The backend never deletes aircraft or their positions. `--stale-timeout` only sets the
-default `max_age` window, so the map's "max age" slider can reach back through everything
-the database holds, and the SQLite file stays complete for offline analysis. Run
-`adsb cleanup` yourself if you ever want to reclaim space. Per-message reception metadata
-(RSSI, receiver serial) is the exception: it is only shown for live aircraft, so the
-backend trims it to a rolling window (`--metadata-retention`, 0 keeps everything).
-
-The database runs in SQLite WAL mode, so `adsb.db-wal` and `adsb.db-shm` alongside
-`adsb.db` are normal while the backend is running.
-
-The REST API is self-contained — you can ignore the map and build your own client
-(mobile, monitoring system, dashboard, etc.) against the backend's `/api/*`.
-
-## Track lines on the map
-
-Every track line on the map comes from one place: the positions the backend stores,
-fetched in bulk from `/api/tracks`. "Show tracks" draws every aircraft's line, and
-clicking an aircraft highlights that same line, so the two can never disagree and the
-line reaches back through the whole "max age" window, not just since the page opened.
-The UI seeds from the window once, then polls with `since` set to the newest timestamp
-it holds, so each refresh only carries the last second or so of positions. It polls only
-while lines are being drawn.
-
-The marker's rotation is a different measurement: the ground track from the aircraft's
-latest velocity report, not something derived from the positions. A marker can point a
-few degrees off its own line because the two come from different messages. Rotation is
-animated and always turns the short way round, so a track crossing north (359° to 1°)
-nudges the marker rather than spinning it.
+| Setting | Default | Option |
+| --- | --- | --- |
+| Backend URL | `http://127.0.0.1:8000` | `--api-url URL` |
+| Bind address | `127.0.0.1` | `--host HOST` |
+| Port | `3000` | `--port PORT` |
+| Mapbox token | Required for the map | `MAPBOX_TOKEN` in the environment or `.env` |
+| Demo mode | Off | `--demo` |
 
 ## Running on separate machines
 
-The receiver host (a Raspberry Pi next to the SDR, say) runs the backend. The frontend
-runs wherever you want to look at the map and only needs network access to the backend's
-port:
+Run the backend on the receiver host and the frontend on any machine that can reach
+its API port:
 
 ```bash
-# On the receiver:
+# Receiver host
 adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 
-# On your laptop (pip install adsb-map first; MAPBOX_TOKEN in env or .env):
+# Laptop, with MAPBOX_TOKEN configured
 adsb start frontend --api-url http://receiver.local:8000
 ```
 
-Or run both on one machine against a remote receiver. `adsb start all` binds to
-`127.0.0.1` by default; `--host` opens both services up and is also the address the
-UI proxies to, so pass it rather than relying on loopback:
+The frontend proxies `/api/*` to the backend, keeping browser requests on the same
+origin without CORS configuration. Add `--host 0.0.0.0` to the frontend command to
+share the map on your LAN.
+
+To run both services on one host while reading a remote feed:
 
 ```bash
-adsb start all --host 0.0.0.0 --backend-port 8000 --frontend-port 3000 \
-  --source net --connect receiver.local 30005 beast --lat 40.7 --lon -74.0
+adsb start all --source net --connect receiver.local 30005 beast --lat 40.7 --lon -74.0
 ```
 
-The frontend reverse-proxies `/api/*` to the backend, so the browser stays same-origin and
-the backend needs no CORS configuration. If the backend is unreachable the UI reports a
-502 rather than hanging. Add `--host 0.0.0.0` to share the UI on your LAN.
-
-For UI development against a remote backend, the Vite dev server proxies the same way:
-
-```bash
-cd frontend
-ADSB_API_URL=http://receiver.local:8000 bun run dev
-```
-
-`ADSB_API_URL` is a shell variable on the command line, not a `.env` entry. Same story for
-`bun run preview` after a build.
-
-## Demo mode
-
-To try the map, or work on the UI, without a receiver or backend at all, add `--demo`:
-
-```bash
-adsb start frontend --demo                 # bundled UI
-cd frontend && bun run dev:demo            # Vite, hot reload
-```
-
-The browser then answers every API call from a built-in simulator: a fixed fleet of
-airliners and light aircraft flying around the default map center, complete with track
-history, occasional reception gaps, and a couple of contacts without a position. The
-header shows a "Demo data" badge so simulated traffic is never mistaken for real. A
-Mapbox token is still needed for the base map.
+`start all --host 0.0.0.0` exposes both services on the LAN. Its internal proxy uses
+loopback for wildcard binds and the supplied address for a specific bind.
 
 ## Network data sources
 
-The decoder connects to existing ADS-B receivers via TCP:
+The decoder reads Mode-S and ADS-B messages from existing receivers over TCP and
+supports DF4/5/17/18/20/21 messages with CPR position decoding.
 
-- **dump1090** — port 30005 (Beast), 30002 (raw)
-- **readsb** — same ports as dump1090
-- **modesdeco2**, or any Beast / raw hex feed
-
-Signal strength (RSSI, in dBFS) is only available from Beast feeds; the raw hex format carries no signal level, so `rssi` stays `null` there and the map shows "No data" for signal.
+| Source | Beast port | Raw hex port |
+| --- | --- | --- |
+| dump1090 / readsb (typical defaults) | `30005` | `30002` |
+| modesdeco2 or another compatible feed | Use the configured port | Use the configured port |
 
 ```bash
-adsb start backend --source net --connect <host> <port> <beast|raw> --lat <lat> --lon <lon>
+adsb start backend --source net --connect HOST PORT beast --lat LAT --lon LON
+# Replace beast with raw for a raw hex feed.
 ```
 
-The network client runs in a background thread, decodes messages, updates the database,
-and prunes stale aircraft every 30 seconds.
+RSSI is available only from Beast feeds, in dBFS. Raw hex feeds carry no signal level;
+the API returns `null` for RSSI and the map displays “No data.”
+
+## API endpoints
+
+The backend provides JSON endpoints under `/api/`. The frontend proxies those paths;
+interactive OpenAPI documentation is available directly on the backend at
+**http://localhost:8000/docs**.
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /api/all?max_age={seconds}` | State vectors for aircraft heard within the age window |
+| `GET /api/icao24?max_age={seconds}` | ICAO24 addresses heard within the age window |
+| `GET /api/track?icao24={icao24}&since={timestamp}` | One aircraft's stored positions; omit `since` for its full retained track |
+| `GET /api/tracks?max_age={seconds}&since={timestamp}` | Stored positions in the time window, keyed by ICAO24; `since` overrides `max_age` |
+| `GET /api/sensors` | Receiver serials present in retained reception metadata |
+| `GET /api/stats?window={seconds}&interval={seconds}&limit={n}` | Traffic chart buckets, aircraft-heard count, and window/lifetime rankings |
+| `GET /api` | API discovery and aircraft database attribution |
+
+`max_age` defaults to the backend's `--stale-timeout` (60 seconds). `since` is a Unix
+timestamp in seconds. `/api/stats` defaults to a 24-hour window, 15-minute intervals,
+and 10 aircraft per ranking. It accepts windows from 60 seconds to seven days,
+intervals from 60 seconds to one day, and limits from 1 to 100; the interval must
+divide the window evenly.
+
+On the backend, `/` also returns API discovery. On the frontend, `/` serves the map
+and `/config.js` supplies its runtime configuration. You can use the backend on its
+own to build another client or analyze your receiver's data.
+
+## Storage and retention
+
+| Data | Retention |
+| --- | --- |
+| Aircraft state and lifetime message counts (`aircraft`) | Retained until manual cleanup |
+| Position history (`aircraft_positions`) | Retained until manual cleanup |
+| Reception metadata (`aircraft_metadata`) | Rolling hour by default; configurable with `--metadata-retention` |
+| Per-minute traffic (`traffic_minutes`) | Rolling seven days |
+| Per-aircraft hourly counts (`aircraft_hourly`) | Rolling seven days |
+
+The network client periodically trims metadata and traffic aggregates. Aircraft and
+positions are retained automatically, so the database can grow over time. Use the API
+or SQLite to query beyond the map's one-hour maximum age window.
+
+`adsb cleanup --stale-timeout SECONDS` explicitly deletes aircraft older than the
+chosen cutoff and their associated positions and reception metadata. Use
+`adsb db-size` to inspect database size and row counts. SQLite uses WAL mode;
+`adsb.db-wal` and `adsb.db-shm` alongside the database are expected while it is running.
+
+## CLI
+
+| Command | Purpose |
+| --- | --- |
+| `adsb start all` | Run the backend and bundled map together |
+| `adsb start backend` | Run the decoder and REST API |
+| `adsb start frontend` | Serve the bundled map, proxy to a backend, or run with `--demo` |
+| `adsb download` | Download the aircraft enrichment database; `--force` refreshes it |
+| `adsb init-db` | Create SQLite tables |
+| `adsb decode HEX` | Decode and store one message |
+| `adsb cleanup` | Manually delete stale aircraft and associated data; default cutoff 60 seconds |
+| `adsb db-size` | Show database file size and row counts |
+
+Pass `--help` to any command for options and examples.
 
 ## Develop from source
 
-The repo uses [`just`](https://github.com/casey/just) for setup, running both development
-servers, building the bundled UI, and cleaning generated assets. Run individual services
-with `uv run adsb …` or Bun directly. Building the UI from source needs a JS toolchain —
-end users installing the wheel do not.
+After the source setup in [Quickstart](#quickstart), use Vite for hot reload:
 
 ```bash
-# Prerequisites (once per machine)
-curl -LsSf https://astral.sh/uv/install.sh | sh     # uv
-uv tool install rust-just                           # just (distro packages are often stale)
-
-git clone https://github.com/jbencina/adsb-map.git
-cd adsb-map
-just bootstrap                                # installs bun if missing
-uv sync --dev
-uv run adsb download                          # one-time
-
-echo 'MAPBOX_TOKEN=pk.your_token_here' > .env    # shared by backend, bundled UI and Vite
-
-# Args after `dev` are passed straight through to `adsb start backend`.
 just dev --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+
+# Or run only the UI with simulated traffic:
+cd frontend
+bun run dev:demo
 ```
 
-Visit http://localhost:3000/. Vite proxies `/api/*` to the backend on port 8000 and serves
-its own `/config.js` from `MAPBOX_TOKEN` in the repo-root `.env`, so the dev UI behaves exactly like
-`adsb start frontend`. To run the halves separately, use these in two terminals:
+For a remote backend, use `ADSB_API_URL=http://receiver.local:8000 bun run dev` from
+`frontend/`. Vite reads `MAPBOX_TOKEN` from the repo-root `.env` and proxies API requests.
 
-```bash
-uv run adsb start backend --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
-cd frontend && bun run dev
-```
-
-Vite proxies to `http://localhost:8000` by default. Set `ADSB_API_URL` on the Bun
-command to use a remote backend, as shown above.
-
-To exercise the production-style bundled frontend locally:
-
-```bash
-just build                                                # frontend → adsb/static/ (needs bun)
-MAPBOX_TOKEN=pk.… uv run adsb start all --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
-# Visit http://localhost:3000/
-```
-
-`adsb start all` runs the backend and bundled UI together. Use `just dev` when
-editing the frontend: it runs Vite so source changes appear without rebuilding.
-For a remote backend, run only `uv run adsb start frontend --api-url http://receiver:8000`.
-
-### Tests, linting, formatting
-
-```bash
-uv run pytest                                 # full test suite
-uv run pytest --cov=adsb --cov-report=term-missing
-uv run tox                                    # multi-version (3.12, 3.13, 3.14)
-
-uv run ruff check .                           # lint
-uv run ruff format .                          # format
-uv run pre-commit install                     # one-time: enable git hooks
-uv run pre-commit run --all-files
-```
-
-Frontend: `bun run test`, `bun run lint`, `bun run format` from `frontend/`.
-
-Verify the wheel ships the bundled frontend (run before merging changes that
-touch packaging, the static mount, or the publish workflow):
-
-```bash
-just build
-uv sync --locked --group build
-uv build --no-build-isolation
-uv run --no-sync twine check --strict dist/*
-uv run --no-sync python scripts/check_dist.py dist
-```
-
-CI pins Bun using `.bun-version` and uv in the workflows. The build group locks
-Hatchling, hatch-vcs, and Twine alongside the other Python dependencies. Ordinary
-`uv build` still works with an isolated build environment; the command above uses
-the locked build tools. Run `uv lock --upgrade` to refresh Python dependencies,
-then test on Python 3.12–3.14. Keep the Ruff version in `pyproject.toml`, `tox.ini`,
-and `.pre-commit-config.yaml` aligned. pyModeS remains on 2.x pending a decoder migration.
-
-## Architecture
-
-**Backend (`adsb/`)**
-
-| Module | Responsibility |
-|---|---|
-| `decoder.py` | pyModeS-based message decoding, CPR positions, DB enrichment |
-| `network.py` | `ADSBNetworkClient` — daemon thread reading from dump1090/readsb |
-| `api.py` | Backend FastAPI app — `/api/*` JSON only |
-| `ui.py` | Frontend FastAPI app — bundled SPA, `/config.js` from `MAPBOX_TOKEN`, reverse proxy for `/api/*` |
-| `models.py` | SQLAlchemy ORM: `Aircraft`, `AircraftPosition`, `AircraftMetadata` |
-| `database.py` | Session/engine management with context-manager pattern |
-| `schemas.py` | Pydantic response models |
-| `aircraft_db.py` | Lazy-loaded singleton CSV (566k+ rows) → registration/type lookup; owns `aircraft_db_path()`, the one location both `download` and the loader use |
-| `status.py` | `StatusReporter` — daemon thread printing the periodic `[STATUS]` line |
-| `traffic.py` | Per-minute / per-aircraft-hour traffic aggregates: writer, purge, backfill, and the `/api/stats` statements |
-| `cli.py` | Click CLI: `start backend`, `start frontend`, `download`, `init-db`, `decode`, `cleanup`, `db-size` |
-| `static/` | Built frontend assets served by `ui.py` (populated by `just build` or CI; gitignored) |
-
-**Frontend (`frontend/src/`)** — React 18 + Vite, compiled and bundled into the wheel
-during release. End users never need a JS toolchain.
-
-### Release flow
-
-CI (`.github/workflows/publish.yml`) handles all of this on a `v*` tag push:
-
-1. The reusable CI workflow runs Python tests on 3.12–3.14 on Linux and macOS,
-   Ruff, and frontend tests. Python environments must match `uv.lock`.
-2. The pinned Bun toolchain builds the UI from `frontend/bun.lock` and stages it
-   into `adsb/static/`.
-3. Locked build tools create an sdist, then build the wheel from that sdist.
-   Validation checks metadata, frontend assets, rebuild sources, and the tag's
-   version. A fresh environment installs the wheel and checks the CLI and UI.
-4. Only after every check passes, a separate job downloads those exact artifacts
-   and uses `uv publish --trusted-publishing always` to ship them via PyPI OIDC.
-   Build jobs have read-only repository permissions and no publishing credentials.
-5. A separate job creates the GitHub Release using the same artifacts and a notes
-   file extracted from `CHANGELOG.md` (or generated notes if no section exists).
-
-The PyPI trusted publisher continues to use the `publish.yml` workflow and `pypi`
-environment. The sdist contains the frontend source, lockfile, and build/test
-configuration so the bundled UI can also be rebuilt from source.
-
-The Mapbox token is **not** baked into the wheel. At runtime, `adsb start frontend`
-exposes `/config.js` which reads `MAPBOX_TOKEN` from its environment (process env, or a
-`.env` file in CWD via `python-dotenv`) and writes `window.APP_CONFIG` for the SPA.
-One wheel works for any user — no rebuild per token, and the backend never sees it.
-
-## Database schema
-
-| Table | Purpose |
-|---|---|
-| `aircraft` | Current state per aircraft (position, velocity, ID, telemetry, registration/type) |
-| `aircraft_positions` | Historical positions for trajectory rendering |
-| `aircraft_metadata` | Reception metadata (timing, RSSI, receiver serial); rolling `--metadata-retention` window |
-| `traffic_minutes` | Messages and distinct aircraft per minute, for the history view; rolling 7 days |
-| `aircraft_hourly` | Messages per aircraft per hour, for the history view's 24-hour top list; rolling 7 days |
-
-See [`data/README.md`](data/README.md) for notes on the aircraft database file.
+The [development guide](https://github.com/jbencina/adsb-map/blob/main/docs/development.md)
+covers toolchain setup, individual services, tests, formatting, package validation,
+architecture, and the release workflow.
 
 ## Aircraft database attribution
 
@@ -390,11 +327,10 @@ through:
 > (https://www.mictronics.de/aircraft-database/), Open Data Commons Attribution License v1.0,
 > distributed via wiedehopf/tar1090-db.
 
-The Python constants live in `adsb/aircraft_db.py` (`AIRCRAFT_DB_ATTRIBUTION`,
-`AIRCRAFT_DB_NOTICE`) and the UI copy in `frontend/src/constants.js`
-(`AIRCRAFT_DB_CREDIT`). See [`data/README.md`](data/README.md) for the file format.
+See the [aircraft database documentation](https://github.com/jbencina/adsb-map/blob/main/data/README.md)
+for the file format and attribution details.
 
 ## License
 
-GNU General Public License v3.0 or later (GPL-3.0-or-later). See [LICENSE](LICENSE).
+GNU General Public License v3.0 or later (GPL-3.0-or-later). See [LICENSE](https://github.com/jbencina/adsb-map/blob/main/LICENSE).
 The aircraft database is a separate work under ODC-By; see above.

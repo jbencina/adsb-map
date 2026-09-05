@@ -43,3 +43,33 @@ def query_plan(engine: Engine, stmt: Select) -> list[str]:
     sql = str(stmt.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
     with engine.connect() as conn:
         return [row[-1] for row in conn.execute(text(f"EXPLAIN QUERY PLAN {sql}"))]
+
+
+@contextmanager
+def serve(app) -> Iterator[str]:
+    """
+    Run ``app`` under uvicorn on a free loopback port for the block's duration.
+
+    The in-process test transports (``TestClient``, ``httpx.ASGITransport``) run
+    an app to completion before handing back a response, so an endless
+    ``text/event-stream`` can only be exercised over a real socket.
+    """
+    import threading
+    import time
+
+    import uvicorn
+
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 5
+    while not server.started:
+        if time.monotonic() > deadline or not thread.is_alive():
+            raise RuntimeError("uvicorn did not start")
+        time.sleep(0.01)
+    port = server.servers[0].sockets[0].getsockname()[1]
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)

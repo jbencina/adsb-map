@@ -55,7 +55,7 @@ build:
         echo "error: bun not found. Run \`just bootstrap\` (or see https://bun.sh)." >&2
         exit 1
     }
-    (cd frontend && bun install && bun run build)
+    (cd frontend && bun install --frozen-lockfile && bun run build)
     mkdir -p adsb/static
     find adsb/static -mindepth 1 ! -name .gitkeep -delete
     cp -r frontend/dist/. adsb/static/

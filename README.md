@@ -271,7 +271,7 @@ MAPBOX_TOKEN=pk.… just frontend                           # or: just frontend 
 ```bash
 uv run pytest                                 # full test suite
 uv run pytest --cov=adsb --cov-report=term-missing
-uv run tox                                    # multi-version (3.12, 3.13)
+uv run tox                                    # multi-version (3.12, 3.13, 3.14)
 
 uv run ruff check .                           # lint
 uv run ruff format .                          # format
@@ -285,10 +285,19 @@ Verify the wheel ships the bundled frontend (run before merging changes that
 touch packaging, the static mount, or the publish workflow):
 
 ```bash
-just build && uv build
-unzip -l dist/adsb_map-*.whl | grep adsb/static/
-# Expected: index.html + assets/*.js + assets/*.css
+just build
+uv sync --locked --group build
+uv build --no-build-isolation
+uv run --no-sync twine check --strict dist/*
+uv run --no-sync python scripts/check_dist.py dist
 ```
+
+CI pins Bun using `.bun-version` and uv in the workflows. The build group locks
+Hatchling, hatch-vcs, and Twine alongside the other Python dependencies. Ordinary
+`uv build` still works with an isolated build environment; the command above uses
+the locked build tools. Run `uv lock --upgrade` to refresh Python dependencies,
+then test on Python 3.12–3.14. Keep the Ruff version in `pyproject.toml`, `tox.ini`,
+and `.pre-commit-config.yaml` aligned. pyModeS remains on 2.x pending a decoder migration.
 
 ## Architecture
 
@@ -316,11 +325,22 @@ during release. End users never need a JS toolchain.
 
 CI (`.github/workflows/publish.yml`) handles all of this on a `v*` tag push:
 
-1. `bun install && bun run build` produces `frontend/dist/`
-2. `frontend/dist/` is staged into `adsb/static/`
-3. `uv build` packages the wheel — `adsb/static/**` is included via the `artifacts`
-   declaration in `pyproject.toml`
-4. `uv publish --trusted-publishing always` ships to PyPI via OIDC (no API tokens stored)
+1. The reusable CI workflow runs Python tests on 3.12–3.14 on Linux and macOS,
+   Ruff, and frontend tests. Python environments must match `uv.lock`.
+2. The pinned Bun toolchain builds the UI from `frontend/bun.lock` and stages it
+   into `adsb/static/`.
+3. Locked build tools create an sdist, then build the wheel from that sdist.
+   Validation checks metadata, frontend assets, rebuild sources, and the tag's
+   version. A fresh environment installs the wheel and checks the CLI and UI.
+4. Only after every check passes, a separate job downloads those exact artifacts
+   and uses `uv publish --trusted-publishing always` to ship them via PyPI OIDC.
+   Build jobs have read-only repository permissions and no publishing credentials.
+5. A separate job creates the GitHub Release using the same artifacts and a notes
+   file extracted from `CHANGELOG.md` (or generated notes if no section exists).
+
+The PyPI trusted publisher continues to use the `publish.yml` workflow and `pypi`
+environment. The sdist contains the frontend source, lockfile, and build/test
+configuration so the bundled UI can also be rebuilt from source.
 
 The Mapbox token is **not** baked into the wheel. At runtime, `adsb start frontend`
 exposes `/config.js` which reads `MAPBOX_TOKEN` from its environment (process env, or a

@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/track` for the selected aircraft alone, a few kilobytes, and only the overview
   uses the bulk fetch; with the overview on, the selected line still comes from that
   same data with no second request.
+- **The settings sheet was unreachable on phones.** At phone widths the popover is a
+  `position: fixed` bottom sheet, but the toolbar's `backdrop-filter` made the toolbar
+  its containing block, so it rendered above the toolbar and off the top of the screen.
+  The toolbar's glass now lives on a pseudo-element, the sheet anchors to the viewport,
+  and the popover scrolls instead of clipping on short screens such as a phone in
+  landscape. The page root tracks the visible viewport (`dvh`) so bottom-anchored cards
+  stay above a mobile browser's address bar, and the icon buttons get 44px touch targets.
 - **Aircraft markers spun in place on some heading changes** (#14). The marker's
   rotation is CSS-animated from the raw track, so a report crossing north (359° to 1°)
   played as a 358° turn the long way round. Each marker now keeps a continuous heading

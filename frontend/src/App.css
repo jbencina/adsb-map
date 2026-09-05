@@ -77,14 +77,19 @@ main {
 
 .toolbar,
 .controls {
-  background: var(--surface);
-  -webkit-backdrop-filter: saturate(140%) blur(24px);
-  backdrop-filter: saturate(140%) blur(24px);
   border: 1px solid var(--line);
   box-shadow: var(--shadow-float);
 }
 
+.controls {
+  background: var(--surface);
+  -webkit-backdrop-filter: saturate(140%) blur(24px);
+  backdrop-filter: saturate(140%) blur(24px);
+}
+
 .toolbar {
+  position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   gap: 16px;
@@ -92,6 +97,20 @@ main {
   padding: 0 6px 0 14px;
   border-radius: var(--radius);
   max-width: 100%;
+}
+
+/* The glass lives on a pseudo-element: a backdrop-filter on the toolbar itself
+   would become the containing block for the phone-width settings sheet, which
+   is position: fixed and must anchor to the viewport. */
+.toolbar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--surface);
+  -webkit-backdrop-filter: saturate(140%) blur(24px);
+  backdrop-filter: saturate(140%) blur(24px);
 }
 
 .brand {
@@ -203,6 +222,7 @@ main {
 }
 
 .toolbar-button {
+  position: relative;
   width: 32px;
   height: 32px;
   border: 0;
@@ -249,11 +269,29 @@ main {
   outline-offset: 2px;
 }
 
+/* Invisible hit areas for touch: the toolbar buttons sit 2px apart, so they
+   grow vertically to 44px and only meet, never overlap, sideways */
+@media (pointer: coarse) {
+  .toolbar-button::before,
+  .close-button::before {
+    content: '';
+    position: absolute;
+    inset: -6px;
+  }
+
+  .toolbar-button::before {
+    inset: -6px -1px;
+  }
+}
+
 .controls {
   position: absolute;
   top: 44px;
   right: -6px;
   width: 340px;
+  max-height: calc(100vh - 44px - var(--gutter) * 2);
+  max-height: calc(100dvh - 44px - var(--gutter) * 2);
+  overflow-y: auto;
   padding: 6px 0;
   border-radius: var(--radius);
   box-shadow: var(--shadow-pop);
@@ -482,6 +520,8 @@ main {
     right: var(--gutter);
     bottom: var(--gutter);
     width: auto;
+    max-height: calc(100vh - var(--gutter) * 2);
+    max-height: calc(100dvh - var(--gutter) * 2);
     transform-origin: bottom center;
   }
 }

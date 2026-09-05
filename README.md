@@ -16,9 +16,9 @@ and Mapbox GL, with aircraft state and position history stored locally in SQLite
 [Configuration](#configuration) · [API](#api-endpoints) ·
 [Development](#develop-from-source) · [Changelog](https://github.com/jbencina/adsb-map/blob/main/CHANGELOG.md)
 
-![Aircraft map with callsign labels, signal-colored markers, a selected track, and flight details](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/screenshots/map-light.png)
+![Aircraft map with callsign labels, signal-colored markers, a selected track, and flight details](https://raw.githubusercontent.com/jbencina/adsb-map/b3435e583e2e25e061c67c0ff723ea596c887881/docs/screenshots/map-light.png)
 
-*Map in light mode, using simulated traffic. [View dark mode](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/screenshots/map-dark.png).*
+*Map in light mode, using simulated traffic. [View dark mode](https://raw.githubusercontent.com/jbencina/adsb-map/b3435e583e2e25e061c67c0ff723ea596c887881/docs/screenshots/map-dark.png).*
 
 > **Release status:** This README describes the current development version on `main`.
 > The latest release, [v0.2.0](https://github.com/jbencina/adsb-map/releases/tag/v0.2.0),
@@ -119,9 +119,9 @@ positions. Heading changes animate through the shortest turn, including across n
 Open the **clock button** beside Settings to see the last 24 hours of traffic.
 The map continues updating underneath; press **Escape** or the close button to return.
 
-![Traffic history with message-volume and peak-aircraft charts and both top-ten aircraft tables](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/screenshots/history-light.png)
+![Traffic history with message-volume and peak-aircraft charts and both top-ten aircraft tables](https://raw.githubusercontent.com/jbencina/adsb-map/b3435e583e2e25e061c67c0ff723ea596c887881/docs/screenshots/history-light.png)
 
-*History in light mode, using simulated traffic. [View dark mode](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/screenshots/history-dark.png).*
+*History in light mode, using simulated traffic. [View dark mode](https://raw.githubusercontent.com/jbencina/adsb-map/b3435e583e2e25e061c67c0ff723ea596c887881/docs/screenshots/history-dark.png).*
 
 - **Summary:** total messages, peak aircraft heard in one minute, and aircraft heard
   across the history window.
@@ -303,7 +303,7 @@ bun run dev:demo
 For a remote backend, use `ADSB_API_URL=http://receiver.local:8000 bun run dev` from
 `frontend/`. Vite reads `MAPBOX_TOKEN` from the repo-root `.env` and proxies API requests.
 
-The [development guide](https://github.com/jbencina/adsb-map/blob/main/docs/development.md)
+The [development guide](https://github.com/jbencina/adsb-map/blob/b3435e583e2e25e061c67c0ff723ea596c887881/docs/development.md)
 covers toolchain setup, individual services, tests, formatting, package validation,
 architecture, and the release workflow.
 

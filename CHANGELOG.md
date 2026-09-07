@@ -7,38 +7,178 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-07
+
+The first stable release. `adsb serve` is replaced by separate backend and frontend
+services, aircraft history is retained instead of purged, and the map gains live
+streaming, a traffic history view, signal strength, and a redesigned interface.
+See the **Breaking** entries under Changed before upgrading from 0.2.0.
+
 ### Added
-- **Live updates over Server-Sent Events instead of polling.** The map now holds one
+- **Live updates over Server-Sent Events instead of polling.** The map holds one
   `/api/stream/aircraft` and one `/api/stream/tracks` connection per tab and receives
   an event per refresh interval: the aircraft list for the age window, and only the
   positions stored since the last event. A dropped connection reconnects on its own
   and resumes the track feed from the last position delivered; a backend outage is
   retried until it returns. The REST endpoints are unchanged for other clients. The
   UI server relays the streams unbuffered and without its 10 s read timeout.
+- **History view.** A clock icon next to the gear opens a full-screen overlay over
+  the map with the last 24 hours of traffic: message volume and peak aircraft per
+  interval (5 min / 15 min / 1 h), and top-10 aircraft by messages in the window
+  and over their lifetime. The map keeps running underneath; Escape or the X
+  returns to it. Backed by a new `GET /api/stats` and two small aggregate tables
+  (`traffic_minutes`, `aircraft_hourly`) the decoder maintains per batch and trims
+  to seven days, so the charts never touch the per-message rows. Existing
+  databases are seeded from their retained hour of metadata on the next start.
+- **Signal strength from Beast feeds** (#13). The Beast parser keeps the signal-level
+  byte, converts it to dBFS (matching readsb's `rssi`), and stores it with each
+  reception; `/api/all` returns it as `rssi`. Raw AVR feeds report `null`. The detail
+  card gains a Reception section with a four-bar indicator and the reading averaged
+  over the last four samples, and a "Shade by signal" switch colours each marker from
+  red through amber to green with a legend chip while it is on.
+- **Redesigned map interface** (#12). A full-bleed map with a floating glass toolbar
+  (brand, live aircraft count, last update, demo badge, settings gear), settings in a
+  popover under the gear that becomes a bottom sheet on phones, top-down plane markers
+  that fade as a contact ages, and a floating detail card with stat tiles for altitude,
+  speed and vertical rate. The selected track is drawn with a gradient that fades into
+  the past. A "Show callsigns" switch adds a label beside every marker, and the theme
+  control offers auto, light, and dark.
+- **Demo mode.** `adsb start frontend --demo` (or `bun run dev:demo`
+  for the Vite dev server) shows a simulated fleet with track history and no backend
+  running. The simulation lives in the browser behind the SPA's data layer, so it
+  exercises the real map, streaming, filtering, and track code paths. The header shows a
+  "Demo data" badge.
+- **Backend and frontend are separate services** that can run on different machines.
+  - `adsb start backend` is the decoder + REST API and nothing else: no HTML, no static
+    files, no CORS.
+  - `adsb start frontend [--api-url http://receiver:8000]` serves the bundled map and
+    reverse-proxies `/api/*` to the backend (same machine by default), so the browser
+    stays same-origin and the backend needs no CORS configuration. It serves `/config.js`
+    from its own `MAPBOX_TOKEN`, so the token lives with the UI. A backend that is down
+    surfaces as a 502/504 JSON error.
+  - `adsb start all` runs both in one process for the single-machine case (#18). Ctrl-C
+    shuts both servers down cleanly, and a port that cannot be bound fails loudly.
+  - `ADSB_API_URL=http://receiver:8000 bun run dev` points the Vite dev/preview proxy
+    at a remote backend; Vite serves its own `/config.js` from `MAPBOX_TOKEN` in the
+    repo-root `.env`, with `VITE_MAPBOX_TOKEN` retained as a fallback.
+- Startup checks for the conditions that otherwise fail silently: `adsb start backend`
+  reports the aircraft database and data source; `adsb start frontend` reports
+  `MAPBOX_TOKEN`.
+- `adsb start backend` prints a `[STATUS]` line every `--stats-interval` seconds (default
+  10, `0` disables): feed address, time since the last message (flagging a stalled feed),
+  messages/positions/aircraft in the window with the message rate, aircraft currently
+  tracked, and cumulative totals. Replaces the old telemetry lines, which only fired while
+  messages were flowing.
+- `GET /` on the backend returns the same discovery JSON as `/api` (now also listing
+  `/docs`) instead of a 404, so opening port 8000 in a browser explains where the data is.
+- `--aircraft-db PATH` on `adsb start backend`, `adsb download` and `adsb decode` overrides the
+  aircraft database location.
+- `--metadata-retention SECONDS` on `start backend` / `start all` (default 3600, 0 to
+  disable): the decoder deletes reception metadata older than this once a minute.
+  Aircraft and positions are still never deleted; metadata is only ever shown for live
+  aircraft, so keeping more just grows the file.
+- Attribution for the aircraft database (#17). The registration / type data is the
+  Mictronics aircraft database under ODC-By 1.0, fetched via the tar1090-db mirror. The
+  credit now appears in the map's detail card, in the `/api` discovery document
+  (`aircraft_db`), at the end of `adsb download` and in its `--help`, with the policy
+  written up in the README and `data/README.md`.
+- SQLite runs in WAL mode with `synchronous=NORMAL`, so API reads no longer wait on the
+  decoder's commits. Expect `adsb.db-wal` and `adsb.db-shm` next to the database.
+- `just bootstrap` installs bun; `just build` now fails with an actionable message when
+  bun is missing instead of a bare "command not found".
+- `adsb download --force`; without it the command is a no-op when the database is
+  already present rather than re-fetching ~9MB.
+- Python 3.14 is supported and tested in CI alongside 3.12 and 3.13.
 
-### Maintenance
+### Changed
+- **Breaking:** `adsb serve` is replaced by `adsb start backend` + `adsb start frontend`
+  (or `adsb start all`). The backend no longer serves the map at `/` or `/config.js`;
+  visit the frontend's port (3000 by default) instead. In a source checkout, replace
+  `just serve` with `uv run adsb start all`.
+- **Breaking:** `adsb download --data-dir` is removed; use `--aircraft-db PATH` instead
+  (same flag on `start backend` and `decode`). Single supported location, single
+  override mechanism.
+- **Breaking:** `AircraftDatabase` no longer auto-extracts a sibling `aircraft.csv.gz`;
+  `adsb download` is the one supported way to obtain the database.
+- **The backend no longer purges stale aircraft.** Previously anything not seen within
+  `--stale-timeout` was deleted every 30 seconds, taking its positions and reception
+  metadata with it, so the map's "max age" slider could never reach past the last minute
+  and the database was useless for offline analysis. Aircraft are now retained forever and
+  `/api/all` and `/api/icao24` filter by age instead, via a new `max_age` query parameter
+  (seconds) that defaults to `--stale-timeout`. The map passes its slider value through
+  and resubscribes when it changes, so dragging it older brings aircraft back. `adsb cleanup`
+  remains as an explicit, manual purge and gained `--stale-timeout`. An aircraft heard
+  again after more than `--stale-timeout` of silence is a new contact: its previous
+  flight's position, callsign and velocity are cleared before the new frame is applied,
+  so a Mode-S-only reply cannot republish a stale position.
+- Track lines come from stored positions bounded to the map's age window. With "Show
+  tracks" on, the map subscribes to `/api/stream/tracks?scope=all`; with it off and an
+  aircraft selected, to the same stream scoped to that aircraft alone. The detail card's
+  Track row explains that the angle is the reported ground track rather than something
+  derived from the line (#16, #23).
+- The header's aircraft count now counts what the map draws. Mode-S-only aircraft (no
+  position) are tracked but invisible, and with the wider age window they were inflating
+  the number well past the markers on screen.
+- The "Max age" and "Refresh interval" boxes no longer snap to "0" when cleared (which
+  then read back as "020" as you typed), and partially typed or out-of-range values are
+  never applied, so the map keeps its last valid setting until you finish.
+- `adsb download` streams the gzip straight to CSV via a `.partial` temp file, so no
+  `aircraft.csv.gz` is left on disk and a failed download cannot leave a truncated CSV
+  where the loader would read it.
+- `.env` is for secrets only (`MAPBOX_TOKEN`); every other setting is a CLI argument.
+  Configuration is never read from `ADSB_*` environment variables.
+- CORS middleware is removed from the backend: every browser path (bundled UI and Vite
+  dev server) reaches the API through a same-origin proxy.
+- Everything browser-facing (static files, SPA fallback, `/config.js`) moved from
+  `adsb.api` to the new `adsb.ui` module; `adsb.api` is JSON only.
+- `httpx` (the `adsb start frontend` proxy) and `platformdirs` (the per-user data
+  directory) are now runtime dependencies.
+- Per-request HTTP access logging on the backend is off by default (the map's stream
+  and REST polling drown everything else); `--access-log` re-enables it.
+- uvicorn's "Invalid HTTP request received." warning is filtered out of the backend
+  console. It fires whenever non-HTTP bytes hit the port (a browser trying HTTPS, a LAN
+  device probing) and is routine noise on a server bound to `0.0.0.0`.
+- `ADSBNetworkClient` exposes `snapshot()` for thread-safe stats; the `telemetry_interval`
+  argument and `_log_telemetry` are gone.
+- `adsb.api._frontend_is_bundled` is now `adsb.ui.frontend_is_bundled`.
 - Simplify `just` recipes to `bootstrap`, `dev`, `build`, and `clean`; document
   direct CLI and Bun commands for individual services.
 - Refresh the README with current map and history screenshots, feature coverage,
-  release-aware setup instructions, and corrected track and retention behavior.
-  Move contributor and release details into `docs/development.md`.
+  and corrected track and retention behavior. Move contributor and release details
+  into `docs/development.md`.
 - Refresh Python dependencies while retaining pyModeS 2.x; align Ruff in CI,
-  tox, and pre-commit, and add weekly dependency/action update PRs.
+  tox, and pre-commit, and add weekly Dependabot PRs for dependencies and actions.
+- Remove `frontend/package-lock.json`, which was left over from before the frontend
+  moved to Bun. Nothing read it, it had drifted from `package.json` (mapbox-gl `^3.1.0`
+  against the required `^3.23.0`), and it was the only file dependency scanning looked
+  at, so the frontend's real lockfile went unwatched. Dependabot now tracks
+  `frontend/bun.lock` instead.
 - Update and pin GitHub Actions, select the actual Python matrix interpreter,
   and enforce the Python lockfile in CI.
 - Gate publishing on the reusable test/build workflow, validate the bundled UI
   and installed wheel, and separate build, PyPI, and GitHub Release permissions.
-- Preserve changelog text through a release notes file, fetch VCS history for
-  build versions, modernize license metadata and project URLs, and include
-  frontend rebuild sources and test configuration in the sdist.
+  A tag push now also creates the GitHub Release with notes taken from this file
+  and the wheel and sdist attached (#7).
+- Fetch VCS history for build versions, modernize license metadata and project URLs,
+  and include frontend rebuild sources and test configuration in the sdist.
+- PyPI metadata is marked `Development Status :: 5 - Production/Stable` and broadened
+  to match how the project is actually used: `Intended Audience :: End Users/Desktop`,
+  `Topic :: Scientific/Engineering :: Visualization`, and
+  `Topic :: Internet :: WWW/HTTP :: HTTP Servers`, with `dump1090`, `readsb`, and
+  `rtl-sdr` added to the keywords. The license is carried by the PEP 639
+  `License-Expression` field rather than a `License ::` classifier.
+
+### Removed
+- `MANIFEST.in`, which was dead — hatchling ignores it, and its `recursive-include adsb
+  *.py` would have *excluded* the bundled frontend had anything honoured it.
 
 ### Fixed
-- **Selecting an aircraft took a second or two to show its track.** With the track
+- **Selecting an aircraft took a second or two to show its track** (#23). With the track
   overview off, a click was still seeding every aircraft's positions from `/api/tracks`
-  (2.5 MB, 25k points on a busy receiver) just to draw one line. It now asks
-  `/api/track` for the selected aircraft alone, a few kilobytes, and only the overview
-  uses the bulk fetch; with the overview on, the selected line still comes from that
-  same data with no second request.
+  (2.5 MB, 25k points on a busy receiver) just to draw one line. It now subscribes to
+  the selected aircraft alone, a few kilobytes, and only the overview uses the bulk
+  feed; with the overview on, the selected line still comes from that same data with
+  no second request.
 - **The settings sheet was unreachable on phones.** At phone widths the popover is a
   `position: fixed` bottom sheet, but the toolbar's `backdrop-filter` made the toolbar
   its containing block, so it rendered above the toolbar and off the top of the screen.
@@ -55,9 +195,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page opened, thinned to one point per 100 m, while a click fetched the stored history
   from `/api/track` once and then let the marker fly on ahead of it. There is now one
   source: a new `/api/tracks` endpoint returns every aircraft's stored positions in the
-  window, the map seeds from it and polls it incrementally (`since`), and the selected
-  aircraft's line is the same data highlighted. Tracks are no longer hidden, and the
-  switch no longer disabled, while an aircraft is selected.
+  window, the map seeds from it and receives new positions incrementally, and the
+  selected aircraft's line is the same data highlighted. Tracks are no longer hidden,
+  and the switch no longer disabled, while an aircraft is selected.
 - **`/api/all` took seconds after an overnight run.** With nothing ever purged, the
   endpoint was running one unindexed `ORDER BY ... LIMIT 4` query per aircraft against
   `aircraft_metadata`, each a full scan and sort of every reception row ever stored
@@ -69,53 +209,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the next start.
 - `/api/sensors` now lists receivers heard within `--metadata-retention`, since its
   source table is trimmed to that window.
-
-### Added
-- **History view.** A clock icon next to the gear opens a full-screen overlay over
-  the map with the last 24 hours of traffic: message volume and peak aircraft per
-  interval (5 min / 15 min / 1 h), and top-10 aircraft by messages in the window
-  and over their lifetime. The map keeps running underneath; Escape or the X
-  returns to it. Backed by a new `GET /api/stats` and two small aggregate tables
-  (`traffic_minutes`, `aircraft_hourly`) the decoder maintains per batch and trims
-  to seven days, so the charts never touch the per-message rows. Existing
-  databases are seeded from their retained hour of metadata on the next start.
-- Attribution for the aircraft database (#17). The registration / type data is the
-  Mictronics aircraft database under ODC-By 1.0, fetched via the tar1090-db mirror. The
-  credit now appears in the map's detail card, in the `/api` discovery document
-  (`aircraft_db`), at the end of `adsb download` and in its `--help`, with the policy
-  written up in the README and `data/README.md`.
-- `--metadata-retention SECONDS` on `start backend` / `start all` (default 3600, 0 to
-  disable): the decoder deletes reception metadata older than this once a minute.
-  Aircraft and positions are still never deleted; metadata is only ever shown for live
-  aircraft, so keeping more just grows the file.
-- SQLite runs in WAL mode with `synchronous=NORMAL`, so API reads no longer wait on the
-  decoder's commits. Expect `adsb.db-wal` and `adsb.db-shm` next to the database.
-
-### Changed
-- The map polls `/api/tracks` while "Show tracks" is on and `/api/track` for a
-  selected aircraft when the overview is off. The detail card's Track row explains
-  that the angle is the reported ground track rather than something derived from
-  the line (#16, #23).
-- **The backend no longer purges stale aircraft.** Previously anything not seen within
-  `--stale-timeout` was deleted every 30 seconds, taking its positions and reception
-  metadata with it, so the map's "max age" slider could never reach past the last minute
-  and the database was useless for offline analysis. Aircraft are now retained forever and
-  `/api/all` and `/api/icao24` filter by age instead, via a new `max_age` query parameter
-  (seconds) that defaults to `--stale-timeout`. The map passes its slider value through
-  and refetches when it changes, so dragging it older brings aircraft back. `adsb cleanup`
-  remains as an explicit, manual purge and gained `--stale-timeout`. An aircraft heard
-  again after more than `--stale-timeout` of silence is a new contact: its previous
-  flight's position, callsign and velocity are cleared before the new frame is applied,
-  so a Mode-S-only reply cannot republish a stale position. Selecting an aircraft fetches
-  its track bounded to the map's age window (`since`), not its whole retained history.
-- The header's aircraft count now counts what the map draws. Mode-S-only aircraft (no
-  position) are tracked but invisible, and with the wider age window they were inflating
-  the number well past the markers on screen.
-- The "Max age" and "Refresh interval" boxes no longer snap to "0" when cleared (which
-  then read back as "020" as you typed), and partially typed or out-of-range values are
-  never applied, so the map keeps polling with the last valid setting until you finish.
-
-### Fixed
 - **Aircraft enrichment was silently broken on every `pip install`.** `adsb download`
   wrote `./data/aircraft.csv` relative to the working directory, while the loader read
   `<package parent>/data/aircraft.csv` — `site-packages/data/` in a wheel, which nothing
@@ -124,73 +217,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-user data directory via `aircraft_db.aircraft_db_path()`.
 - A source checkout with no frontend build gave no hint that `just build` was the missing
   step. `adsb start frontend` now refuses to start with an explanatory error.
-
-### Added
-- **Demo mode.** `adsb start frontend --demo` (or `bun run dev:demo`
-  for the Vite dev server) shows a simulated fleet with track history and no backend
-  running. The simulation lives in the browser behind the SPA's data layer, so it
-  exercises the real map, polling, filtering, and track code paths. The header shows a
-  "Demo data" badge.
-- **Backend and frontend are separate services** that can run on different machines.
-  - `adsb start backend` is the decoder + REST API and nothing else: no HTML, no static
-    files, no CORS.
-  - `adsb start frontend [--api-url http://receiver:8000]` serves the bundled map and
-    reverse-proxies `/api/*` to the backend (same machine by default), so the browser
-    stays same-origin and the backend needs no CORS configuration. It serves `/config.js`
-    from its own `MAPBOX_TOKEN`, so the token lives with the UI. A backend that is down
-    surfaces as a 502/504 JSON error.
-  - `ADSB_API_URL=http://receiver:8000 bun run dev` points the Vite dev/preview proxy
-    at a remote backend; Vite serves its own `/config.js` from `MAPBOX_TOKEN` in the
-    repo-root `.env`, with `VITE_MAPBOX_TOKEN` retained as a fallback.
-- Startup checks for the conditions that otherwise fail silently: `adsb start backend`
-  reports the aircraft database and data source; `adsb start frontend` reports
-  `MAPBOX_TOKEN`.
-- `adsb start backend` prints a `[STATUS]` line every `--stats-interval` seconds (default
-  10, `0` disables): feed address, time since the last message (flagging a stalled feed),
-  messages/positions/aircraft in the window with the message rate, aircraft currently
-  tracked, and cumulative totals. Replaces the old telemetry lines, which only fired while
-  messages were flowing.
-- `GET /` on the backend returns the same discovery JSON as `/api` (now also listing
-  `/docs`) instead of a 404, so opening port 8000 in a browser explains where the data is.
-- `--aircraft-db PATH` on `adsb start backend`, `adsb download` and `adsb decode` overrides the
-  aircraft database location.
-- `just bootstrap` installs bun; `just build` now fails with an actionable message when
-  bun is missing instead of a bare "command not found".
-- `adsb download --force`; without it the command is a no-op when the database is
-  already present rather than re-fetching ~9MB.
-
-### Changed
-- **Breaking:** `adsb serve` is replaced by `adsb start backend` + `adsb start frontend`.
-  The backend no longer serves the map at `/` or `/config.js`; visit the frontend's port
-  (3000 by default) instead. In a source checkout, replace `just serve` with
-  `uv run adsb start backend` and `uv run adsb start frontend`, or `uv run adsb start all`.
-- `adsb download` streams the gzip straight to CSV via a `.partial` temp file, so no
-  `aircraft.csv.gz` is left on disk and a failed download cannot leave a truncated CSV
-  where the loader would read it.
-- **Breaking:** `adsb download --data-dir` is removed; use `--aircraft-db PATH` instead
-  (same flag on `start backend` and `decode`). Single supported location, single
-  override mechanism.
-- `.env` is for secrets only (`MAPBOX_TOKEN`); every other setting is a CLI argument.
-  Configuration is never read from `ADSB_*` environment variables.
-- CORS middleware is removed from the backend: every browser path (bundled UI and Vite
-  dev server) reaches the API through a same-origin proxy.
-- Everything browser-facing (static files, SPA fallback, `/config.js`) moved from
-  `adsb.api` to the new `adsb.ui` module; `adsb.api` is JSON only.
-- `httpx` is now a runtime dependency (used by the `adsb start frontend` proxy).
-- Per-request HTTP access logging on the backend is off by default (the map polls
-  `/api/all` every second, drowning everything else); `--access-log` re-enables it.
-- uvicorn's "Invalid HTTP request received." warning is filtered out of the backend
-  console. It fires whenever non-HTTP bytes hit the port (a browser trying HTTPS, a LAN
-  device probing) and is routine noise on a server bound to `0.0.0.0`.
-- `ADSBNetworkClient` exposes `snapshot()` for thread-safe stats; the `telemetry_interval`
-  argument and `_log_telemetry` are gone.
-- **Breaking:** `AircraftDatabase` no longer auto-extracts a sibling `aircraft.csv.gz`;
-  `adsb download` is the one supported way to obtain the database.
-- `adsb.api._frontend_is_bundled` is now `adsb.ui.frontend_is_bundled`.
-
-### Removed
-- `MANIFEST.in`, which was dead — hatchling ignores it, and its `recursive-include adsb
-  *.py` would have *excluded* the bundled frontend had anything honoured it.
 
 ## [0.2.0] - 2026-05-01
 
@@ -246,7 +272,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marker; previously `rm -rf adsb/static` left the working tree dirty after every
   build.
 
-## [0.1.1] - 2024-11-07
+## [0.1.1] - 2025-11-07
 
 ### Fixed
 - Fixed broken image link on PyPI (now uses absolute GitHub URL)
@@ -254,7 +280,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added CI and Publish workflow status badges
 - Corrected GitHub repository URLs in badges (adsb → adsb-map)
 
-## [0.1.0] - 2024-11-07
+## [0.1.0] - 2025-11-07
 
 ### Added
 - Initial release of adsb-map

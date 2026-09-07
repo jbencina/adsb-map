@@ -16,14 +16,9 @@ and Mapbox GL, with aircraft state and position history stored locally in SQLite
 [Configuration](#configuration) · [API](#api-endpoints) ·
 [Development](#develop-from-source) · [Changelog](https://github.com/jbencina/adsb-map/blob/main/CHANGELOG.md)
 
-![Aircraft map with callsign labels, signal-colored markers, a selected track, and flight details](https://raw.githubusercontent.com/jbencina/adsb-map/b3435e583e2e25e061c67c0ff723ea596c887881/docs/screenshots/map-light.png)
+![Aircraft map with callsign labels, signal-colored markers, a selected track, and flight details](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/screenshots/map-light.png)
 
-*Map in light mode, using simulated traffic. [View dark mode](https://raw.githubusercontent.com/jbencina/adsb-map/b3435e583e2e25e061c67c0ff723ea596c887881/docs/screenshots/map-dark.png).*
-
-> **Release status:** This README describes the current development version on `main`.
-> The latest release, [v0.2.0](https://github.com/jbencina/adsb-map/releases/tag/v0.2.0),
-> uses `adsb serve` and predates the history view and `adsb start` commands below.
-> Install from source to use these features before the next release.
+*Map in light mode, using simulated traffic. [View dark mode](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/screenshots/map-dark.png).*
 
 ## Features
 
@@ -55,23 +50,25 @@ Replace the feed host and receiver coordinates in the examples with your own.
 ### Install from PyPI
 
 The published release includes the prebuilt UI, so you only need Python.
-The commands below apply to v0.2.0, which serves the map and API on a single port.
 
 ```bash
 pip install adsb-map
 adsb download
 export MAPBOX_TOKEN=pk.your_token_here
-adsb serve --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
+adsb start all --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 ```
 
-Open **http://localhost:8000/**. See
-[the v0.2.0 README](https://github.com/jbencina/adsb-map/blob/v0.2.0/README.md)
-for release-specific options. To use the history view and other unreleased features,
-install from source below.
+Open **http://localhost:3000/**. The backend listens on port 8000 and the map on
+port 3000; `start all` runs both in one process, bound to `127.0.0.1` by default.
+To try the UI without a receiver, run `adsb start frontend --demo` instead.
+
+Upgrading from 0.2.0? `adsb serve` is gone; see the
+[changelog](https://github.com/jbencina/adsb-map/blob/main/CHANGELOG.md) for the
+other breaking changes.
 
 ### Install from source
 
-The current development version also requires
+Building from source also requires
 [uv](https://docs.astral.sh/uv/getting-started/installation/)
 and [just](https://github.com/casey/just#installation).
 `just bootstrap` installs Bun if needed; ensure it is on your `PATH` before building.
@@ -88,10 +85,8 @@ export MAPBOX_TOKEN=pk.your_token_here
 uv run adsb start all --source net --connect localhost 30005 beast --lat 40.7 --lon -74.0
 ```
 
-Open **http://localhost:3000/**. The backend listens on port 8000 and the map on
-port 3000; `start all` runs both in one process, bound to `127.0.0.1` by default.
-
-To try the UI without a receiver, replace the final command with:
+Open **http://localhost:3000/** as above. To try the UI without a receiver, replace
+the final command with:
 
 ```bash
 uv run adsb start frontend --demo
@@ -101,8 +96,8 @@ You can also set `MAPBOX_TOKEN` in a `.env` file in the directory where you laun
 the frontend. It is a public browser token, served at runtime through `/config.js`;
 you do not need to rebuild the UI when it changes.
 
-The remaining examples describe the current development version and use `adsb`
-directly. In a source checkout, prefix each command with `uv run`, as above.
+The remaining examples use `adsb` directly. In a source checkout, prefix each
+command with `uv run`, as above.
 
 ## Using the map
 
@@ -113,7 +108,7 @@ Open **Settings** to choose:
 
 | Control | Behavior |
 | --- | --- |
-| Refresh interval | Poll every 1–60 seconds; default 1 second |
+| Refresh interval | Receive updates every 1–60 seconds; default 1 second |
 | Max age | Show aircraft heard within the last 1–60 minutes; default 5 minutes |
 | Show callsigns | Toggle labels beside aircraft markers |
 | Shade by signal | Color markers by reception strength |
@@ -123,9 +118,9 @@ Open **Settings** to choose:
 ### Track lines on the map
 
 Tracks use positions stored by the backend and follow the map's **Max age** window.
-Selecting an aircraft fetches only its track through `/api/track`. With **Show tracks**
-enabled, `/api/tracks` supplies all tracks, including the selected highlight. Both
-modes fetch new positions incrementally and poll only while tracks are displayed.
+Selecting an aircraft streams only its track. With **Show tracks** enabled, the stream
+carries every aircraft's track, including the selected highlight. Both modes receive
+new positions incrementally and hold the track stream only while tracks are displayed.
 
 The marker heading and the detail card's **Track** angle come from the aircraft's
 reported ground track. They may differ slightly from the line joining its recorded
@@ -136,9 +131,9 @@ positions. Heading changes animate through the shortest turn, including across n
 Open the **clock button** beside Settings to see the last 24 hours of traffic.
 The map continues updating underneath; press **Escape** or the close button to return.
 
-![Traffic history with message-volume and peak-aircraft charts and both top-ten aircraft tables](https://raw.githubusercontent.com/jbencina/adsb-map/b3435e583e2e25e061c67c0ff723ea596c887881/docs/screenshots/history-light.png)
+![Traffic history with message-volume and peak-aircraft charts and both top-ten aircraft tables](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/screenshots/history-light.png)
 
-*History in light mode, using simulated traffic. [View dark mode](https://raw.githubusercontent.com/jbencina/adsb-map/b3435e583e2e25e061c67c0ff723ea596c887881/docs/screenshots/history-dark.png).*
+*History in light mode, using simulated traffic. [View dark mode](https://raw.githubusercontent.com/jbencina/adsb-map/main/docs/screenshots/history-dark.png).*
 
 - **Summary:** total messages, peak aircraft heard in one minute, and aircraft heard
   across the history window.
@@ -328,7 +323,7 @@ bun run dev:demo
 For a remote backend, use `ADSB_API_URL=http://receiver.local:8000 bun run dev` from
 `frontend/`. Vite reads `MAPBOX_TOKEN` from the repo-root `.env` and proxies API requests.
 
-The [development guide](https://github.com/jbencina/adsb-map/blob/b3435e583e2e25e061c67c0ff723ea596c887881/docs/development.md)
+The [development guide](https://github.com/jbencina/adsb-map/blob/main/docs/development.md)
 covers toolchain setup, individual services, tests, formatting, package validation,
 architecture, and the release workflow.
 

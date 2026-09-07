@@ -7,6 +7,16 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+
+  # The frontend is built with Bun; frontend/bun.lock is the only lockfile.
+  - package-ecosystem: bun
+    directory: /frontend
+    schedule:
+      interval: weekly
+    groups:
+      frontend:
+        patterns: ["*"]
+
   - package-ecosystem: uv
     directory: /
     schedule:

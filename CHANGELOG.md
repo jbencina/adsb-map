@@ -163,7 +163,6 @@ See the **Breaking** entries under Changed before upgrading from 0.2.0.
   and include frontend rebuild sources and test configuration in the sdist.
 - PyPI metadata is marked `Development Status :: 5 - Production/Stable` and broadened
   to match how the project is actually used: `Intended Audience :: End Users/Desktop`,
-  `Topic :: Communications :: Ham Radio`, `Topic :: Scientific/Engineering :: GIS`,
   `Topic :: Scientific/Engineering :: Visualization`, and
   `Topic :: Internet :: WWW/HTTP :: HTTP Servers`, with `dump1090`, `readsb`, and
   `rtl-sdr` added to the keywords. The license is carried by the PEP 639

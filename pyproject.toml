@@ -9,23 +9,31 @@ license-files = ["LICENSE"]
 authors = [
     {name = "John Bencina", email = "jbencina@users.noreply.github.com"}
 ]
-keywords = ["adsb", "ads-b", "aviation", "aircraft", "tracking", "pymodes", "decoder", "mode-s", "sdr", "beast"]
+keywords = [
+    "adsb", "ads-b", "mode-s", "aviation", "aircraft", "tracking", "flight-tracking",
+    "pymodes", "decoder", "sdr", "rtl-sdr", "beast", "dump1090", "readsb",
+]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Environment :: Web Environment",
+    "Framework :: FastAPI",
     "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
-    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Communications :: Ham Radio",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
     "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: GIS",
     "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Scientific/Engineering :: Visualization",
     "Topic :: System :: Monitoring",
-    "Framework :: FastAPI",
 ]
 dependencies = [
     "fastapi>=0.115.0",

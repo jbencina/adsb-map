@@ -191,3 +191,23 @@ describe('smoothAircraft', () => {
     expect(shown).toBe(a)
   })
 })
+
+describe('updateMotion across the antimeridian', () => {
+  const options = { blendMs: 1000, maxProjectMs: 30000 }
+  const now = 1700000000000
+
+  test('records the short way round when a fix crosses 180 degrees', () => {
+    const before = {
+      latitude: 0,
+      longitude: 179.999,
+      groundspeed: 0,
+      track: 90,
+      lastseen: now / 1000,
+    }
+    const previous = updateMotion(undefined, before, now, options)
+    const after = { ...before, longitude: -179.999 }
+    const motion = updateMotion(previous, after, now + 1000, options)
+    expect(motion.offsetLon).toBeCloseTo(-0.002, 8)
+    expect(displayPosition(motion, now + 1500, options).longitude).toBeCloseTo(-180, 3)
+  })
+})

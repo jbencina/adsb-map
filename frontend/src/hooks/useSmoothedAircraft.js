@@ -21,9 +21,18 @@ const REDUCED_MOTION = '(prefers-reduced-motion: reduce)'
 export function useSmoothedAircraft(aircraft) {
   const records = useRef(new Map())
   const [shown, setShown] = useState(aircraft)
-  const [still] = useState(
+  const [still, setStill] = useState(
     () => typeof matchMedia === 'function' && matchMedia(REDUCED_MOTION).matches
   )
+
+  // Follow the preference if it changes while the page is open
+  useEffect(() => {
+    if (typeof matchMedia !== 'function') return undefined
+    const query = matchMedia(REDUCED_MOTION)
+    const follow = () => setStill(query.matches)
+    query.addEventListener('change', follow)
+    return () => query.removeEventListener('change', follow)
+  }, [])
 
   // Fold each update in before the next frame draws (effects run in order)
   useEffect(() => {

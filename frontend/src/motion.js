@@ -16,6 +16,9 @@ const DEG = Math.PI / 180
 
 const isNum = value => typeof value === 'number' && Number.isFinite(value)
 
+// Shortest signed way round for a longitude difference (a fix crossing the antimeridian)
+const wrapLongitude = delta => (Math.abs(delta) > 180 ? delta - Math.sign(delta) * 360 : delta)
+
 /**
  * Where an aircraft is after flying straight from a fix for a while.
  *
@@ -98,7 +101,7 @@ export function updateMotion(previous, ac, now, options = {}) {
   if (previous) {
     const drawn = displayPosition(previous, now, options)
     record.offsetLat = drawn.latitude - latitude
-    record.offsetLon = drawn.longitude - longitude
+    record.offsetLon = wrapLongitude(drawn.longitude - longitude)
   } else {
     const { maxProjectMs = MOTION_MAX_PROJECT_MS } = options
     if (isNum(ac.lastseen) && now - ac.lastseen * 1000 > maxProjectMs) record.groundspeed = null

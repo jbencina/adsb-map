@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Aircraft glide between updates.** Each marker is redrawn every frame by dead
+  reckoning from its last changed position along its reported track at its reported
+  groundspeed, and a new position pulls the marker onto it over a second instead of
+  jumping. Motion stays continuous whatever the refresh interval and through missed
+  updates; a silent aircraft holds after a minute. Honors `prefers-reduced-motion`.
 - **Live updates over Server-Sent Events instead of polling.** The map now holds one
   `/api/stream/aircraft` and one `/api/stream/tracks` connection per tab and receives
   an event per refresh interval: the aircraft list for the age window, and only the

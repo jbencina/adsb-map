@@ -76,3 +76,7 @@ export const AIRCRAFT_DB_CREDIT = {
   license: 'ODC-By 1.0',
   url: 'https://opendatacommons.org/licenses/by/1-0/',
 }
+
+// Marker motion between updates (dead reckoning from reported speed and track)
+export const MOTION_BLEND_MS = 1000 // how long a new fix takes to pull the marker onto it
+export const MOTION_MAX_PROJECT_MS = 60000 // stop projecting a silent fix forward after this (the longest refresh interval)

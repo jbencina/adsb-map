@@ -20,6 +20,7 @@ import {
 import { hasPosition } from '../aircraft'
 import { aircraftRssi, signalColor, signalLevel } from '../signal'
 import { useContinuousHeadings } from '../hooks/useContinuousHeadings'
+import { useSmoothedAircraft } from '../hooks/useSmoothedAircraft'
 import AircraftTags from './AircraftTags'
 import SignalBars from './SignalBars'
 import './AircraftMap.css'
@@ -143,10 +144,13 @@ function AircraftMap({
   const formatRssi = rssi => rssi.toFixed(1).replace('-', '\u2212')
 
   // Filter aircraft with valid positions
-  const validAircraft = useMemo(() => aircraft.filter(hasPosition), [aircraft])
+  const positioned = useMemo(() => aircraft.filter(hasPosition), [aircraft])
+
+  // Drawn positions glide between updates by dead reckoning, so this list changes every frame
+  const validAircraft = useSmoothedAircraft(positioned)
 
   // Rotation that only ever turns the short way, so headings crossing north do not spin
-  const headings = useContinuousHeadings(validAircraft)
+  const headings = useContinuousHeadings(positioned)
 
   // The selection is a snapshot from click time; the card reads the live record so it keeps
   // updating, and falls back to the snapshot once the aircraft has aged out of the list

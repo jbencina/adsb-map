@@ -131,6 +131,13 @@ The marker heading and the detail card's **Track** angle come from the aircraft'
 reported ground track. They may differ slightly from the line joining its recorded
 positions. Heading changes animate through the shortest turn, including across north.
 
+Between updates each marker keeps moving by dead reckoning: it is redrawn every frame
+along its reported track at its reported groundspeed from the last position that
+changed, and a new position pulls it onto the fix over a second rather than jumping.
+Motion stays continuous whatever the **Refresh interval**, so the marker may sit a
+little ahead of the end of its track line. An aircraft that goes silent holds after a
+minute. The animation is off when the browser asks for reduced motion.
+
 ## Traffic history
 
 Open the **clock button** beside Settings to see the last 24 hours of traffic.

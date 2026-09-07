@@ -148,6 +148,11 @@ See the **Breaking** entries under Changed before upgrading from 0.2.0.
   into `docs/development.md`.
 - Refresh Python dependencies while retaining pyModeS 2.x; align Ruff in CI,
   tox, and pre-commit, and add weekly Dependabot PRs for dependencies and actions.
+- Remove `frontend/package-lock.json`, which was left over from before the frontend
+  moved to Bun. Nothing read it, it had drifted from `package.json` (mapbox-gl `^3.1.0`
+  against the required `^3.23.0`), and it was the only file dependency scanning looked
+  at, so the frontend's real lockfile went unwatched. Dependabot now tracks
+  `frontend/bun.lock` instead.
 - Update and pin GitHub Actions, select the actual Python matrix interpreter,
   and enforce the Python lockfile in CI.
 - Gate publishing on the reusable test/build workflow, validate the bundled UI

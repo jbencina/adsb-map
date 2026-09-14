@@ -2,6 +2,7 @@
 
 import logging
 import math
+import socket
 import threading
 import time
 
@@ -21,6 +22,9 @@ BEAST_ESC = 0x1A
 BEAST_HEADER_LEN = 8
 BEAST_PAYLOAD_LEN = {0x31: 2, 0x32: 7, 0x33: 14}  # Mode-AC, Mode-S short, Mode-S long
 BEAST_MODE_S_TYPES = (0x32, 0x33)
+FEED_IDLE_TIMEOUT = 60
+FEED_CONNECT_TIMEOUT = 5
+FEED_RETRY_DELAY = 5
 
 
 def beast_signal_to_dbfs(level: int) -> float | None:
@@ -211,7 +215,7 @@ class ADSBNetworkClient(TcpClient):
         Parse Beast frames from ``self.buffer``, keeping the signal level.
 
         Overrides the pyModeS parser (which discards the signal byte) and is
-        called by the inherited ``run`` loop when ``rawtype`` is ``beast``.
+        called by the receive loop when ``rawtype`` is ``beast``.
 
         Returns
         -------
@@ -226,6 +230,53 @@ class ADSBNetworkClient(TcpClient):
             if decoded is not None:
                 messages.append((decoded[0], ts, decoded[1]))
         return messages
+
+    def run(self):
+        """Receive until stopped, reconnecting after silence or a failed session.
+
+        Own the TCP lifecycle instead of inheriting pyModeS' receive loop, which
+        can exit permanently on an exception and does not observe our stop event.
+        Socket polling bounds shutdown latency; monotonic time measures silence.
+        """
+        while not self._stop_event.is_set():
+            try:
+                with socket.create_connection(
+                    (self.host, self.port), timeout=FEED_CONNECT_TIMEOUT
+                ) as connection:
+                    connection.settimeout(1)
+                    self.buffer = []  # Never splice frames across connections.
+                    logger.info("Connected to feed %s:%s (%s)", self.host, self.port, self.datatype)
+                    last_data = time.monotonic()
+                    while not self._stop_event.is_set():
+                        try:
+                            received = connection.recv(4096)
+                        except TimeoutError:
+                            if time.monotonic() - last_data >= FEED_IDLE_TIMEOUT:
+                                raise TimeoutError(
+                                    f"Feed silent for {FEED_IDLE_TIMEOUT} seconds"
+                                ) from None
+                            continue
+                        if not received:
+                            raise ConnectionError("Feed closed the connection")
+                        last_data = time.monotonic()
+                        self.buffer.extend(received)
+                        if self.datatype == "beast":
+                            messages = self.read_beast_buffer()
+                        elif self.datatype == "raw":
+                            messages = self.read_raw_buffer()
+                        else:
+                            messages = self.read_skysense_buffer()
+                        self.handle_messages(messages)
+            except Exception:
+                if not self._stop_event.is_set():
+                    logger.exception(
+                        "Feed %s:%s failed; reconnecting in %ss",
+                        self.host,
+                        self.port,
+                        FEED_RETRY_DELAY,
+                    )
+            if self._stop_event.wait(FEED_RETRY_DELAY):
+                break
 
     def handle_messages(self, messages):
         """

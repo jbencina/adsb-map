@@ -72,7 +72,7 @@ def test_backfill_seeds_minutes_and_hours_from_metadata(test_db, aircraft):
     with test_db.get_session() as session:
         add_metadata(session, aircraft.id, [base, base + 10.5, base + 61])
     with test_db.get_session() as session:
-        assert backfill_traffic(session) is True
+        assert backfill_traffic(session, now=base + 120) is True
     with test_db.get_session() as session:
         rows = {r.minute: (r.messages, r.aircraft) for r in session.query(TrafficMinute)}
         assert rows == {int(base): (2, 1), int(base) + 60: (1, 1)}

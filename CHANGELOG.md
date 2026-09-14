@@ -5,7 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - Unreleased
+
+### Added
+- Feed connection and failure logs, including exception tracebacks and retry timing,
+  to diagnose receiver outages while the backend API remains running.
+
+### Fixed
+- Reconnect the backend receiver feed after disconnects, receive/processing errors,
+  or 60 seconds without data instead of leaving ingestion stalled. Retry after five
+  seconds and clear partial frames so data from separate connections is never mixed.
+- Honor backend shutdown while receiving feed data or waiting to reconnect.
+- Keep traffic aggregation tests independent of the calendar date so their fixtures
+  do not age out of the retention window.
 
 ## [1.0.0] - 2026-09-07
 

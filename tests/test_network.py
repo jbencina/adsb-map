@@ -402,7 +402,7 @@ def test_handle_messages_records_traffic_aggregates(test_db):
     from adsb.traffic import hour_of, minute_of
 
     client = ADSBNetworkClient(host="localhost", port=30005, rawtype="beast", database=test_db)
-    ts = 1_788_556_190.4
+    ts = minute_of(time.time()) + 10.4
     _patched_client_handle(client, [("8D4840D6202CC371C32CE0576098", ts)] * 3)
     _patched_client_handle(client, [("8D4840D6202CC371C32CE0576098", ts + 1)])
 
@@ -428,3 +428,108 @@ def test_handle_messages_purges_old_traffic_with_metadata(test_db):
     with test_db.get_session() as session:
         assert session.get(TrafficMinute, 60) is None
         assert TRAFFIC_RETENTION > 0
+
+
+@pytest.mark.parametrize("failure", [b"", ConnectionResetError("reset"), TimeoutError()])
+def test_run_reconnects_and_discards_partial_frame(test_db, failure):
+    """EOF, reset and prolonged silence reconnect without joining old/new frames."""
+    from unittest.mock import MagicMock
+
+    client = make_client(test_db)
+    frame = beast_frame(0x33, LONG_MSG)
+    first, second = MagicMock(), MagicMock()
+    first.__enter__.return_value = first
+    second.__enter__.return_value = second
+    first.recv.side_effect = [frame[:12], failure]
+    second.recv.return_value = frame
+    received = []
+
+    def handle(messages):
+        received.extend(messages)
+        if messages:
+            client.stop()
+
+    with (
+        patch("adsb.network.socket.create_connection", side_effect=[first, second]) as connect,
+        patch("adsb.network.FEED_RETRY_DELAY", 0),
+        patch("adsb.network.FEED_IDLE_TIMEOUT", 0),
+        patch.object(client, "handle_messages", side_effect=handle),
+    ):
+        client.run()
+
+    assert connect.call_count == 2
+    assert [row[0] for row in received] == [LONG_MSG]
+    first.__exit__.assert_called_once()
+    second.__exit__.assert_called_once()
+
+
+def test_run_retries_connect_and_processing_errors(test_db, caplog):
+    """A failed connect or batch commit must not permanently kill ingestion."""
+    from unittest.mock import MagicMock
+
+    client = make_client(test_db)
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    connection.recv.return_value = beast_frame(0x33, LONG_MSG)
+    with (
+        patch(
+            "adsb.network.socket.create_connection",
+            side_effect=[ConnectionRefusedError("offline"), connection, connection],
+        ) as connect,
+        patch("adsb.network.FEED_RETRY_DELAY", 0),
+        patch.object(client, "handle_messages") as handle,
+    ):
+
+        def process(messages):
+            if handle.call_count == 1:
+                raise RuntimeError("commit failed")
+            client.stop()
+
+        handle.side_effect = process
+        client.run()
+
+    assert connect.call_count == 3
+    assert handle.call_count == 2
+    assert "offline" in caplog.text
+    assert "commit failed" in caplog.text
+
+
+def test_run_short_silence_keeps_connection_and_observes_stop(test_db):
+    from unittest.mock import MagicMock
+
+    client = make_client(test_db)
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    connection.recv.side_effect = [TimeoutError(), beast_frame(0x33, LONG_MSG)]
+    with (
+        patch("adsb.network.socket.create_connection", return_value=connection) as connect,
+        patch("adsb.network.time.monotonic", return_value=0),
+        patch.object(client, "handle_messages", side_effect=lambda messages: client.stop()),
+    ):
+        client.run()
+
+    connect.assert_called_once()
+    assert connection.recv.call_count == 2
+    connection.__exit__.assert_called_once()
+
+
+def test_run_stop_interrupts_retry_wait(test_db):
+    import threading
+
+    client = make_client(test_db)
+    failed = threading.Event()
+
+    def fail(*args, **kwargs):
+        failed.set()
+        raise ConnectionRefusedError("offline")
+
+    with patch("adsb.network.socket.create_connection", side_effect=fail) as connect:
+        thread = threading.Thread(target=client.run, daemon=True)
+        thread.start()
+        try:
+            assert failed.wait(2)
+        finally:
+            client.stop()
+            thread.join(timeout=2)
+        assert not thread.is_alive()
+        connect.assert_called_once()

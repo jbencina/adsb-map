@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-14
+
+### Added
+- Feed connection and failure logs, including exception tracebacks and retry timing,
+  to diagnose receiver outages while the backend API remains running.
+
+### Fixed
+- Reconnect the backend receiver feed after disconnects, receive/processing errors,
+  or 60 seconds without data instead of leaving ingestion stalled. Retry after five
+  seconds and clear partial frames so data from separate connections is never mixed.
+- Honor backend shutdown while receiving feed data or waiting to reconnect.
+- Keep traffic aggregation tests independent of the calendar date so their fixtures
+  do not age out of the retention window.
+
 ## [1.0.0] - 2026-09-07
 
 The first stable release. `adsb serve` is replaced by separate backend and frontend

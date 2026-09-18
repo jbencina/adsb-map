@@ -26,7 +26,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
@@ -40,7 +40,7 @@ jobs:
           uv run --no-sync python -c 'import os, sys; assert ".".join(map(str, sys.version_info[:2])) == os.environ["EXPECTED_PYTHON"]'
           uv run --no-sync pytest --cov=adsb --cov-report=xml --cov-report=term
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
         if: matrix.python-version == '3.12' && matrix.os == 'ubuntu-latest'
         with:
           files: ./coverage.xml
@@ -54,7 +54,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: "3.12"
@@ -84,7 +84,7 @@ jobs:
           mkdir -p adsb/static
           find adsb/static -mindepth 1 ! -name .gitkeep -delete
           cp -r frontend/dist/. adsb/static/
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: "3.12"
